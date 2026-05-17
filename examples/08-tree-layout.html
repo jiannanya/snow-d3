@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Collapsible Tree — snow-d3 example 08</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
+    .link { fill: none; stroke: #c1c1c1; stroke-width: 1.5; }
+    .node circle { cursor: pointer; stroke-width: 2; }
+    .node text { font-size: 12px; fill: #333; cursor: pointer; }
+    .node.has-children circle { stroke: #4f86c6; }
+    .node.leaf circle { stroke: #82c91e; }
+    .node.collapsed circle { fill: #4f86c6; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+    }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    .badge { font-size: 10px; fill: white; text-anchor: middle; pointer-events: none; }
+  </style>
+</head>
+<body>
+<h1>D3 Collapsible Tree Layout</h1>
+<p class="desc">Click any node to collapse/expand subtrees. Pan and zoom with mouse.<br>Uses <code>d3.tree()</code>, <code>d3.hierarchy()</code>, smooth animated transitions.</p>
+<div class="controls">
+  <button id="btn-expand-all">Expand All</button>
+  <button id="btn-collapse-all">Collapse All</button>
+  <button id="btn-horizontal">Toggle Orientation</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Hierarchical data ─────────────────────────────────────────────────────
+const treeData = {
+  name: "Organization", type: "root",
+  children: [
+    { name: "Engineering", type: "dept",
+      children: [
+        { name: "Frontend", type: "team",
+          children: [
+            { name: "React", type: "leaf" },
+            { name: "Vue", type: "leaf" },
+            { name: "Angular", type: "leaf" }
+          ]
+        },
+        { name: "Backend", type: "team",
+          children: [
+            { name: "Node.js", type: "leaf" },
+            { name: "Python", type: "leaf" },
+            { name: "Go", type: "leaf" },
+            { name: "Rust", type: "leaf" }
+          ]
+        },
+        { name: "DevOps", type: "team",
+          children: [
+            { name: "Docker", type: "leaf" },
+            { name: "K8s", type: "leaf" },
+            { name: "CI/CD", type: "leaf" }
+          ]
+        }
+      ]
+    },
+    { name: "Product", type: "dept",
+      children: [
+        { name: "Design", type: "team",
+          children: [
+            { name: "UI", type: "leaf" },
+            { name: "UX", type: "leaf" },
+            { name: "Research", type: "leaf" }
+          ]
+        },
+        { name: "PM", type: "team",
+          children: [
+            { name: "Roadmap", type: "leaf" },
+            { name: "Analytics", type: "leaf" }
+          ]
+        }
+      ]
+    },
+    { name: "Data", type: "dept",
+      children: [
+        { name: "ML", type: "team",
+          children: [
+            { name: "Training", type: "leaf" },
+            { name: "Inference", type: "leaf" },
+            { name: "MLOps", type: "leaf" }
+          ]
+        },
+        { name: "Analytics", type: "team",
+          children: [
+            { name: "BI", type: "leaf" },
+            { name: "Pipelines", type: "leaf" }
+          ]
+        }
+      ]
+    }
+  ]
+};
+
+// ── Dimensions ────────────────────────────────────────────────────────────
+const width = 880, height = 560;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const zoomG = svg.append("g");
+
+const zoom = d3.zoom().scaleExtent([0.3, 3])
+  .on("zoom", e => zoomG.attr("transform", e.transform));
+svg.call(zoom);
+
+const g = zoomG.append("g").attr("transform",`translate(80,${height/2})`);
+
+// ── Colors ────────────────────────────────────────────────────────────────
+const typeColor = { root: "#e74c3c", dept: "#3498db", team: "#2ecc71", leaf: "#f39c12" };
+
+// ── State ─────────────────────────────────────────────────────────────────
+let isHorizontal = true; // left-to-right
+let uid = 0;
+
+const root = d3.hierarchy(treeData);
+root.x0 = 0; root.y0 = 0;
+root.each(d => { d.id = uid++; });
+
+// Collapse to depth 2 initially
+root.descendants().forEach(d => {
+  if (d.depth >= 2 && d.children) {
+    d._children = d.children;
+    d.children = null;
+  }
+});
+
+// ── Tooltip ───────────────────────────────────────────────────────────────
+const tooltip = d3.select("#tooltip");
+
+// ── Update / Render ───────────────────────────────────────────────────────
+function update(source) {
+  const dur = 450;
+
+  const treeLayout = d3.tree();
+  if (isHorizontal) {
+    treeLayout.size([height - 80, width - 220]);
+  } else {
+    treeLayout.size([width - 100, height - 140]);
+  }
+
+  treeLayout(root);
+
+  const nodePos = d => isHorizontal
+    ? { x: d.y, y: d.x }
+    : { x: d.x, y: d.y };
+
+  const nodes = root.descendants();
+  const links = root.links();
+
+  // ── Links ─────────────────────────────────────────────────────────────
+  const linkSel = g.selectAll(".link")
+    .data(links, d => d.target.id);
+
+  const linkEnter = linkSel.enter().insert("path","g")
+    .attr("class","link")
+    .attr("d", () => {
+      const o = nodePos(source);
+      return diagonal({ source: o, target: o });
+    });
+
+  linkSel.merge(linkEnter)
+    .transition().duration(dur)
+    .attr("d", d => diagonal({ source: nodePos(d.source), target: nodePos(d.target) }));
+
+  linkSel.exit().transition().duration(dur)
+    .attr("d", () => {
+      const o = nodePos(source);
+      return diagonal({ source: o, target: o });
+    }).remove();
+
+  // ── Nodes ─────────────────────────────────────────────────────────────
+  const nodeSel = g.selectAll("g.node")
+    .data(nodes, d => d.id);
+
+  const nodeEnter = nodeSel.enter().append("g")
+    .attr("class", d => `node ${d._children ? "has-children collapsed" : d.children ? "has-children" : "leaf"}`)
+    .attr("transform", () => {
+      const o = nodePos(source);
+      return `translate(${o.x || source.y0 || 0},${o.y || source.x0 || 0})`;
+    })
+    .on("click", (event, d) => {
+      event.stopPropagation();
+      toggle(d); update(d);
+    })
+    .on("mouseover", (event, d) => {
+      const kids = (d._children || d.children || []).length;
+      tooltip.html(
+        `<strong>${d.data.name}</strong><br>` +
+        `Type: ${d.data.type}<br>` +
+        `Depth: ${d.depth}` +
+        (kids ? `<br>Children: ${kids}` : "")
+      ).style("opacity",1);
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout", () => tooltip.style("opacity",0));
+
+  nodeEnter.append("circle").attr("r",0)
+    .attr("fill", d => typeColor[d.data.type] || "#999")
+    .attr("fill-opacity", d => d._children ? 1 : 0.85);
+
+  nodeEnter.append("text")
+    .attr("dy","0.31em")
+    .attr("x", d => isHorizontal ? (d.children || d._children ? -14 : 14) : 0)
+    .attr("y", d => isHorizontal ? 0 : (d.children || d._children ? -16 : 16))
+    .attr("text-anchor", d => isHorizontal
+      ? (d.children || d._children ? "end" : "start")
+      : "middle")
+    .text(d => d.data.name);
+
+  // Collapsed badge
+  nodeEnter.append("text").attr("class","badge").attr("dy","0.35em");
+
+  const nodeUpdate = nodeSel.merge(nodeEnter);
+
+  nodeUpdate.attr("class", d => `node ${d._children ? "has-children collapsed" : d.children ? "has-children" : "leaf"}`)
+    .transition().duration(dur)
+    .attr("transform", d => {
+      const p = nodePos(d);
+      return `translate(${p.x},${p.y})`;
+    });
+
+  nodeUpdate.select("circle")
+    .transition().duration(dur)
+    .attr("r", 9)
+    .attr("fill", d => d._children ? typeColor[d.data.type] : "white")
+    .attr("stroke", d => typeColor[d.data.type]);
+
+  nodeUpdate.select("text:not(.badge)")
+    .attr("x", d => isHorizontal ? (d.children || d._children ? -14 : 14) : 0)
+    .attr("y", d => isHorizontal ? 0 : (d.children || d._children ? -16 : 16))
+    .attr("text-anchor", d => isHorizontal
+      ? (d.children || d._children ? "end" : "start")
+      : "middle");
+
+  nodeUpdate.select("text.badge")
+    .text(d => d._children ? (d._children.length) : "");
+
+  nodeSel.exit().transition().duration(dur)
+    .attr("transform", () => {
+      const o = nodePos(source);
+      return `translate(${o.x},${o.y})`;
+    })
+    .remove()
+    .select("circle").attr("r",0);
+
+  // Save positions
+  root.each(d => { d.x0 = nodePos(d).x; d.y0 = nodePos(d).y; });
+}
+
+function diagonal({ source, target }) {
+  if (isHorizontal) {
+    return `M${source.x},${source.y}C${(source.x+target.x)/2},${source.y} ${(source.x+target.x)/2},${target.y} ${target.x},${target.y}`;
+  } else {
+    return `M${source.x},${source.y}C${source.x},${(source.y+target.y)/2} ${target.x},${(source.y+target.y)/2} ${target.x},${target.y}`;
+  }
+}
+
+function toggle(d) {
+  if (d.children) { d._children = d.children; d.children = null; }
+  else             { d.children = d._children; d._children = null; }
+}
+
+// ── Controls ─────────────────────────────────────────────────────────────
+d3.select("#btn-expand-all").on("click", () => {
+  root.each(d => { if (d._children) { d.children = d._children; d._children = null; } });
+  update(root);
+});
+d3.select("#btn-collapse-all").on("click", () => {
+  root.children?.forEach(c => {
+    c.each(d => { if (d.children) { d._children = d.children; d.children = null; } });
+  });
+  update(root);
+});
+d3.select("#btn-horizontal").on("click", () => {
+  isHorizontal = !isHorizontal;
+  g.attr("transform", isHorizontal ? `translate(80,${height/2})` : `translate(${width/2},40)`);
+  update(root);
+});
+
+update(root);
+</script>
+</body>
+</html>

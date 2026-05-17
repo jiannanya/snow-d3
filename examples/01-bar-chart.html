@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Bar Chart — snow-d3 example 01</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f9f9f9; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .bar { transition: opacity 0.15s; }
+    .bar:hover { opacity: 0.75; cursor: pointer; }
+    .axis text { font-size: 12px; fill: #555; }
+    .axis .domain { stroke: #ccc; }
+    .axis .tick line { stroke: #e5e5e5; }
+    .x-axis .domain { display: none; }
+    .label { font-size: 11px; fill: #fff; text-anchor: middle; pointer-events: none; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.88); color: #fff;
+      padding: 7px 12px; border-radius: 6px; font-size: 13px;
+      pointer-events: none; opacity: 0; transition: opacity 0.12s;
+      white-space: nowrap;
+    }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button {
+      padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px;
+      background: white; cursor: pointer; font-size: 13px;
+    }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+  </style>
+</head>
+<body>
+<h1>D3 Bar Chart</h1>
+<p class="desc">Vertical and horizontal bar chart with animated sort, hover tooltip, and color scheme. Uses <code>scaleBand</code>, <code>scaleLinear</code>, and data join.</p>
+<div class="controls">
+  <button id="btn-vertical" class="active">Vertical</button>
+  <button id="btn-horizontal">Horizontal</button>
+  <button id="btn-sort">Sort by Value</button>
+  <button id="btn-shuffle">Randomize Data</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const ITEMS = [
+  "Apples","Bananas","Cherries","Dates","Elderberries",
+  "Figs","Grapes","Honeydew","Kiwi","Lemon"
+];
+
+function makeData() {
+  return ITEMS.map(name => ({ name, value: Math.round(Math.random() * 90 + 10) }));
+}
+let data = makeData();
+let sorted = false;
+let orientation = "vertical"; // or "horizontal"
+
+// ── Dimensions ────────────────────────────────────────────────────────────
+const width = 700, height = 420;
+const margin = { top: 20, right: 20, bottom: 50, left: 55 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+// ── SVG ───────────────────────────────────────────────────────────────────
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width", "100%").style("height", "auto");
+
+const g = svg.append("g")
+  .attr("transform", `translate(${margin.left},${margin.top})`);
+
+// Axis groups
+const xAxisG = g.append("g").attr("class", "axis x-axis").attr("transform", `translate(0,${innerH})`);
+const yAxisG = g.append("g").attr("class", "axis y-axis");
+
+// Color scale
+const color = d3.scaleOrdinal(d3.schemeTableau10);
+
+// Tooltip
+const tooltip = d3.select("#tooltip");
+
+// ── Render ────────────────────────────────────────────────────────────────
+function render(animate = true) {
+  const dur = animate ? 500 : 0;
+  const displayData = sorted ? [...data].sort((a,b) => b.value - a.value) : data;
+
+  if (orientation === "vertical") {
+    const xScale = d3.scaleBand()
+      .domain(displayData.map(d => d.name))
+      .range([0, innerW]).padding(0.2);
+
+    const yScale = d3.scaleLinear()
+      .domain([0, d3.max(displayData, d => d.value)])
+      .range([innerH, 0]).nice();
+
+    // Axes
+    xAxisG.transition().duration(dur)
+      .call(d3.axisBottom(xScale))
+      .call(a => a.selectAll(".tick line").attr("stroke","none"));
+    yAxisG.transition().duration(dur)
+      .call(d3.axisLeft(yScale).ticks(6).tickSize(-innerW))
+      .call(a => a.select(".domain").remove())
+      .call(a => a.selectAll(".tick line")
+        .attr("stroke-opacity", 0.2).attr("stroke-dasharray","3,3"));
+
+    // Bars
+    g.selectAll(".bar")
+      .data(displayData, d => d.name)
+      .join(
+        enter => enter.append("rect").attr("class","bar")
+          .attr("x", d => xScale(d.name))
+          .attr("y", innerH).attr("width", xScale.bandwidth()).attr("height", 0)
+          .attr("rx", 3).attr("fill", d => color(d.name))
+          .call(el => attachTooltip(el)),
+        update => update,
+        exit => exit.transition().duration(dur/2).attr("height", 0).attr("y", innerH).remove()
+      )
+      .on("mouseover", null).on("mousemove", null).on("mouseout", null)
+      .call(el => attachTooltip(el))
+      .transition().duration(dur).ease(d3.easeCubicOut)
+        .attr("x", d => xScale(d.name))
+        .attr("y", d => yScale(d.value))
+        .attr("width", xScale.bandwidth())
+        .attr("height", d => innerH - yScale(d.value))
+        .attr("fill", d => color(d.name));
+
+    // Value labels
+    g.selectAll(".label")
+      .data(displayData, d => d.name)
+      .join(
+        enter => enter.append("text").attr("class","label")
+          .attr("x", d => xScale(d.name) + xScale.bandwidth()/2)
+          .attr("y", innerH).attr("opacity",0),
+        update => update,
+        exit => exit.remove()
+      )
+      .transition().duration(dur)
+        .attr("x", d => xScale(d.name) + xScale.bandwidth()/2)
+        .attr("y", d => yScale(d.value) + 16)
+        .attr("opacity", d => (innerH - yScale(d.value)) > 20 ? 1 : 0)
+        .text(d => d.value);
+
+  } else {
+    // Horizontal
+    const yScale = d3.scaleBand()
+      .domain(displayData.map(d => d.name))
+      .range([0, innerH]).padding(0.2);
+
+    const xScale = d3.scaleLinear()
+      .domain([0, d3.max(displayData, d => d.value)])
+      .range([0, innerW]).nice();
+
+    xAxisG.transition().duration(dur)
+      .call(d3.axisBottom(xScale).ticks(6).tickSize(-innerH))
+      .call(a => a.select(".domain").remove())
+      .call(a => a.selectAll(".tick line")
+        .attr("stroke-opacity",0.2).attr("stroke-dasharray","3,3"));
+    yAxisG.transition().duration(dur)
+      .call(d3.axisLeft(yScale))
+      .call(a => a.selectAll(".tick line").attr("stroke","none"));
+
+    // Bars
+    g.selectAll(".bar")
+      .data(displayData, d => d.name)
+      .join(
+        enter => enter.append("rect").attr("class","bar")
+          .attr("x", 0).attr("y", d => yScale(d.name))
+          .attr("width", 0).attr("height", yScale.bandwidth())
+          .attr("rx", 3).attr("fill", d => color(d.name))
+          .call(el => attachTooltip(el)),
+        update => update,
+        exit => exit.transition().duration(dur/2).attr("width", 0).remove()
+      )
+      .on("mouseover", null).on("mousemove", null).on("mouseout", null)
+      .call(el => attachTooltip(el))
+      .transition().duration(dur).ease(d3.easeCubicOut)
+        .attr("x", 0)
+        .attr("y", d => yScale(d.name))
+        .attr("width", d => xScale(d.value))
+        .attr("height", yScale.bandwidth())
+        .attr("fill", d => color(d.name));
+
+    // Remove vertical labels
+    g.selectAll(".label").remove();
+  }
+}
+
+function attachTooltip(sel) {
+  sel
+    .on("mouseover", (event, d) => {
+      tooltip.html(`<strong>${d.name}</strong>: ${d.value}`).style("opacity",1);
+    })
+    .on("mousemove", (event) => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-30)+"px");
+    })
+    .on("mouseout", () => tooltip.style("opacity",0));
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────
+d3.select("#btn-vertical").on("click", function() {
+  orientation = "vertical";
+  d3.selectAll("button").classed("active", false);
+  d3.select(this).classed("active", true);
+  render();
+});
+d3.select("#btn-horizontal").on("click", function() {
+  orientation = "horizontal";
+  d3.selectAll("button").classed("active", false);
+  d3.select(this).classed("active", true);
+  render();
+});
+d3.select("#btn-sort").on("click", () => { sorted = !sorted; render(); });
+d3.select("#btn-shuffle").on("click", () => { data = makeData(); render(); });
+
+render(false);
+</script>
+</body>
+</html>

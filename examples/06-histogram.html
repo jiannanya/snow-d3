@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Histogram — snow-d3 example 06</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .bar rect { transition: opacity 0.15s; cursor: pointer; }
+    .bar rect:hover { opacity: 0.75; }
+    .density-path { fill: none; stroke-width: 2.5; pointer-events: none; }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .grid .tick line { stroke: #eee; }
+    .grid .domain { display: none; }
+    .controls { margin-bottom: 12px; display: flex; gap: 14px; align-items: center; font-size: 13px; }
+    input[type=range] { width: 130px; }
+    label { color: #555; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 7px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Histogram</h1>
+<p class="desc">Histogram with optional KDE density curve, adjustable bin count, and animated updates. Uses <code>bin()</code>, <code>scaleLinear</code>, <code>area()</code> for KDE.</p>
+<div class="controls">
+  <label>Distribution:
+    <select id="sel-dist">
+      <option value="normal">Normal</option>
+      <option value="uniform">Uniform</option>
+      <option value="exponential">Exponential</option>
+      <option value="bimodal">Bimodal</option>
+    </select>
+  </label>
+  <label>Bins: <span id="bin-val">30</span>
+    <input type="range" id="range-bins" min="5" max="80" value="30">
+  </label>
+  <label><input type="checkbox" id="chk-kde" checked> KDE curve</label>
+  <button id="btn-resample" style="padding:4px 12px;border:1px solid #bbb;border-radius:4px;background:white;cursor:pointer;">Resample</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Distributions ─────────────────────────────────────────────────────────
+const N = 2000;
+
+function normal(mean=0, sd=1) {
+  // Box-Muller
+  const u = Math.random(), v = Math.random();
+  return mean + sd * Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+}
+
+function sample(dist) {
+  switch (dist) {
+    case "normal":      return d3.range(N).map(() => normal(50, 12));
+    case "uniform":     return d3.range(N).map(() => Math.random() * 100);
+    case "exponential": return d3.range(N).map(() => -20 * Math.log(Math.random()));
+    case "bimodal":     return d3.range(N).map((_, i) =>
+      i < N/2 ? normal(30, 8) : normal(70, 8)
+    );
+  }
+}
+
+let dist = "normal";
+let data = sample(dist);
+let nBins = 30;
+let showKde = true;
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 760, height = 420;
+const margin = { top: 20, right: 30, bottom: 50, left: 55 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+// ── Scales ────────────────────────────────────────────────────────────────
+const xScale = d3.scaleLinear().range([0, innerW]);
+const yScale = d3.scaleLinear().range([innerH, 0]);
+const yKde   = d3.scaleLinear().range([innerH, 0]);
+
+// Axes
+const xAxisG = g.append("g").attr("class","axis x-axis").attr("transform",`translate(0,${innerH})`);
+const yAxisG = g.append("g").attr("class","axis y-axis");
+const gridG  = g.append("g").attr("class","axis grid");
+
+svg.append("text")
+  .attr("x",margin.left+innerW/2).attr("y",height-8)
+  .attr("text-anchor","middle").style("font-size","12px").style("fill","#777").text("Value");
+svg.append("text")
+  .attr("transform","rotate(-90)")
+  .attr("x",-(margin.top+innerH/2)).attr("y",15)
+  .attr("text-anchor","middle").style("font-size","12px").style("fill","#777").text("Count");
+
+const tooltip = d3.select("#tooltip");
+
+// ── KDE ───────────────────────────────────────────────────────────────────
+function kernelDensityEstimator(kernel, X) {
+  return V => X.map(x => [x, d3.mean(V, v => kernel(x - v))]);
+}
+function epanechnikov(bandwidth) {
+  return v => Math.abs(v /= bandwidth) <= 1 ? 0.75 * (1 - v * v) / bandwidth : 0;
+}
+
+const kdePath = g.append("path").attr("class","density-path").attr("stroke","#e23b3b");
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function render(animate = true) {
+  const dur = animate ? 450 : 0;
+  const extent = d3.extent(data);
+  const pad = (extent[1]-extent[0]) * 0.05;
+  xScale.domain([extent[0]-pad, extent[1]+pad]).nice();
+
+  const binner = d3.bin().domain(xScale.domain()).thresholds(nBins);
+  const bins = binner(data);
+
+  yScale.domain([0, d3.max(bins, b => b.length)]).nice();
+
+  // Grid
+  gridG.transition().duration(dur)
+    .call(d3.axisLeft(yScale).ticks(5).tickSize(-innerW).tickFormat(""))
+    .call(a => a.select(".domain").remove())
+    .call(a => a.selectAll(".tick line").attr("stroke","#eee"));
+
+  xAxisG.transition().duration(dur).call(d3.axisBottom(xScale).ticks(10));
+  yAxisG.transition().duration(dur).call(d3.axisLeft(yScale).ticks(5));
+
+  // Bars
+  const bars = g.selectAll(".bar")
+    .data(bins)
+    .join(
+      enter => enter.append("g").attr("class","bar")
+        .call(el => el.append("rect")
+          .attr("x", d => xScale(d.x0) + 1)
+          .attr("y", innerH).attr("width", 0).attr("height", 0)
+          .attr("fill","#4f86c6").attr("fill-opacity",0.7).attr("rx",1)),
+      update => update,
+      exit => exit.transition().duration(dur/2)
+        .call(el => el.select("rect").attr("height",0).attr("y",innerH))
+        .remove()
+    );
+
+  bars.select("rect")
+    .on("mouseover", (event, d) => {
+      tooltip.html(
+        `Range: [${d.x0.toFixed(1)}, ${d.x1.toFixed(1)})<br>` +
+        `Count: <strong>${d.length}</strong><br>` +
+        `Freq: ${(d.length/N*100).toFixed(1)}%`
+      ).style("opacity",1);
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout",() => tooltip.style("opacity",0))
+    .transition().duration(dur).ease(d3.easeCubicOut)
+      .attr("x", d => xScale(d.x0)+1)
+      .attr("width", d => Math.max(0, xScale(d.x1) - xScale(d.x0) - 2))
+      .attr("y", d => yScale(d.length))
+      .attr("height", d => innerH - yScale(d.length));
+
+  // KDE curve
+  if (showKde) {
+    const bandwidth = (extent[1]-extent[0]) / nBins * 2;
+    const ticks = xScale.ticks(200);
+    const kde = kernelDensityEstimator(epanechnikov(bandwidth), ticks)(data);
+    const maxDensity = d3.max(kde, d => d[1]);
+    const yMax = yScale.domain()[1];
+    yKde.domain([0, maxDensity]).range([innerH, innerH - yMax * innerH / yScale.domain()[1]]);
+
+    const lineGen = d3.line().x(d => xScale(d[0])).y(d => innerH - (d[1]/maxDensity)*(innerH - yScale(yScale.domain()[1]))).curve(d3.curveBasis);
+
+    // Scale density to match bar heights visually
+    const scale = d3.max(bins, b => b.length) / maxDensity;
+    const lineGenScaled = d3.line()
+      .x(d => xScale(d[0]))
+      .y(d => yScale(d[1] * scale))
+      .curve(d3.curveBasis);
+
+    kdePath.style("display",null)
+      .transition().duration(dur)
+      .attr("d", lineGenScaled(kde));
+  } else {
+    kdePath.style("display","none");
+  }
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────
+d3.select("#sel-dist").on("change", function() { dist = this.value; data = sample(dist); render(); });
+d3.select("#range-bins").on("input", function() {
+  nBins = +this.value;
+  d3.select("#bin-val").text(nBins);
+  render();
+});
+d3.select("#chk-kde").on("change", function() { showKde = this.checked; render(); });
+d3.select("#btn-resample").on("click", () => { data = sample(dist); render(); });
+
+render(false);
+</script>
+</body>
+</html>

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Focus + Context Brush & Zoom — snow-d3 example 13</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .grid .tick line { stroke: #eee; }
+    .grid .domain { display: none; }
+    .focus-line { fill: none; stroke-width: 2; }
+    .context-line { fill: none; stroke-width: 1.5; opacity: 0.6; }
+    .context-area { opacity: 0.25; }
+    .brush .selection { fill: rgba(59,130,246,0.15); stroke: #3b82f6; stroke-width: 1; }
+    .zoom-rect { fill: none; pointer-events: all; cursor: crosshair; }
+    .focus-dot { fill: white; stroke-width: 2; }
+    .crosshair { stroke: #aaa; stroke-width: 1; stroke-dasharray: 3,3; pointer-events: none; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+    .panel-label { font-size: 11px; fill: #999; }
+    .range-label { font-size: 12px; fill: #3b82f6; font-weight: 600; }
+  </style>
+</head>
+<body>
+<h1>D3 Brush + Zoom — Focus &amp; Context</h1>
+<p class="desc">Top panel: detailed view with zoom. Bottom panel: brush overview to select time range.<br>Uses <code>brushX()</code>, <code>zoom()</code>, <code>scaleTime</code>, multi-series with crosshair tooltip.</p>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Synthetic time-series ─────────────────────────────────────────────────
+const SERIES = ["Revenue", "Cost", "Profit"];
+const color  = d3.scaleOrdinal(d3.schemeTableau10).domain(SERIES);
+
+const N = 365;
+const baseDate = new Date(2022, 0, 1);
+
+function genSeries(seed, amp, offset) {
+  let v = offset;
+  const rng = () => { seed = (seed * 16807) % 2147483647; return (seed-1)/2147483646; };
+  return d3.range(N).map((_, i) => {
+    v += (rng() - 0.47) * amp;
+    v  = Math.max(10, Math.min(290, v));
+    return { date: d3.timeDay.offset(baseDate, i), value: +v.toFixed(1) };
+  });
+}
+
+const seriesData = {
+  Revenue: genSeries(7, 8, 160),
+  Cost:    genSeries(13, 6, 110),
+  Profit:  genSeries(31, 5, 50),
+};
+
+const allDates  = seriesData[SERIES[0]].map(d => d.date);
+const allValues = SERIES.flatMap(s => seriesData[s].map(d => d.value));
+
+// ── Dimensions ────────────────────────────────────────────────────────────
+const totalW = 860;
+const focusH  = 300;
+const contextH = 80;
+const margin = { top: 15, right: 20, bottom: 30, left: 55 };
+const cMargin = { top: 10, right: 20, bottom: 20, left: 55 };
+
+const innerW  = totalW - margin.left - margin.right;
+const focusIH = focusH  - margin.top  - margin.bottom;
+const ctxIH   = contextH - cMargin.top - cMargin.bottom;
+
+const totalH = focusH + contextH + 20;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", totalW).attr("height", totalH)
+  .attr("viewBox",`0 0 ${totalW} ${totalH}`)
+  .style("max-width","100%").style("height","auto");
+
+// Clip paths
+svg.append("defs")
+  .append("clipPath").attr("id","focus-clip")
+  .append("rect").attr("width", innerW).attr("height", focusIH + 5).attr("y", -5);
+
+// ── Scales ────────────────────────────────────────────────────────────────
+const xFocus   = d3.scaleTime().domain(d3.extent(allDates)).range([0, innerW]);
+const xContext = d3.scaleTime().domain(d3.extent(allDates)).range([0, innerW]);
+const yFocus   = d3.scaleLinear().domain([d3.min(allValues)-10, d3.max(allValues)+10]).range([focusIH, 0]);
+const yContext = d3.scaleLinear().domain(yFocus.domain()).range([ctxIH, 0]);
+
+// ── Focus panel ────────────────────────────────────────────────────────────
+const focusG = svg.append("g")
+  .attr("transform",`translate(${margin.left},${margin.top})`);
+
+focusG.append("text").attr("class","panel-label").attr("x",4).attr("y",-4).text("Detail View");
+
+// Grid
+const gridG = focusG.append("g").attr("class","axis grid")
+  .call(d3.axisLeft(yFocus).ticks(5).tickSize(-innerW).tickFormat(""))
+  .call(a => a.select(".domain").remove())
+  .call(a => a.selectAll(".tick line").attr("stroke","#eee"));
+
+const xFocusAxisG = focusG.append("g").attr("class","axis x-axis")
+  .attr("transform",`translate(0,${focusIH})`);
+const yFocusAxisG = focusG.append("g").attr("class","axis y-axis");
+
+xFocusAxisG.call(d3.axisBottom(xFocus).ticks(10).tickFormat(d3.timeFormat("%b '%y")));
+yFocusAxisG.call(d3.axisLeft(yFocus).ticks(5));
+
+// Lines
+const focusLineGen = s => d3.line()
+  .x(d => xFocus(d.date))
+  .y(d => yFocus(d.value))
+  .curve(d3.curveMonotoneX)(seriesData[s]);
+
+const clipG = focusG.append("g").attr("clip-path","url(#focus-clip)");
+
+const focusPaths = {};
+SERIES.forEach(s => {
+  focusPaths[s] = clipG.append("path")
+    .attr("class","focus-line")
+    .attr("stroke", color(s))
+    .attr("d", focusLineGen(s));
+});
+
+// Hover dots
+const focusDots = {};
+SERIES.forEach(s => {
+  focusDots[s] = clipG.append("circle")
+    .attr("class","focus-dot").attr("r",5).attr("stroke",color(s))
+    .style("display","none");
+});
+
+// Crosshair
+const vLine = focusG.append("line").attr("class","crosshair")
+  .style("display","none").attr("y1",0).attr("y2",focusIH);
+
+// ── Context panel ──────────────────────────────────────────────────────────
+const ctxOffsetY = focusH + 15;
+const ctxG = svg.append("g")
+  .attr("transform",`translate(${cMargin.left},${ctxOffsetY})`);
+
+ctxG.append("text").attr("class","panel-label").attr("x",4).attr("y",-4).text("Overview — brush to select range");
+
+ctxG.append("g").attr("class","axis x-axis").attr("transform",`translate(0,${ctxIH})`)
+  .call(d3.axisBottom(xContext).ticks(12).tickFormat(d3.timeFormat("%b '%y")));
+
+const ctxLineGen = s => d3.line()
+  .x(d => xContext(d.date)).y(d => yContext(d.value))
+  .curve(d3.curveMonotoneX)(seriesData[s]);
+
+const ctxAreaGen = s => d3.area()
+  .x(d => xContext(d.date)).y0(ctxIH).y1(d => yContext(d.value))
+  .curve(d3.curveMonotoneX)(seriesData[s]);
+
+SERIES.forEach(s => {
+  ctxG.append("path").attr("class","context-area")
+    .attr("fill",color(s)).attr("d",ctxAreaGen(s));
+  ctxG.append("path").attr("class","context-line")
+    .attr("stroke",color(s)).attr("d",ctxLineGen(s));
+});
+
+// ── Legend ────────────────────────────────────────────────────────────────
+const legend = svg.append("g")
+  .attr("transform",`translate(${margin.left + innerW - 80},${margin.top + 8})`);
+SERIES.forEach((s,i) => {
+  legend.append("rect").attr("x",0).attr("y",i*18).attr("width",14).attr("height",3)
+    .attr("rx",2).attr("fill",color(s));
+  legend.append("text").attr("x",18).attr("y",i*18+4)
+    .style("font-size","12px").style("fill","#444").text(s);
+});
+
+// Range label
+const rangeLabel = svg.append("text").attr("class","range-label")
+  .attr("x", margin.left).attr("y", ctxOffsetY - 8);
+
+// ── Tooltip ───────────────────────────────────────────────────────────────
+const tooltip = d3.select("#tooltip");
+const allPoints = SERIES.flatMap(s => seriesData[s].map(d => ({ ...d, series: s })));
+
+// Interaction overlay
+const overlay = focusG.append("rect")
+  .attr("class","zoom-rect").attr("width",innerW).attr("height",focusIH);
+
+overlay.on("mousemove", (event) => {
+  const [mx] = d3.pointer(event);
+  const x0 = xFocus.invert(mx);
+  const bisect = d3.bisector(d => d.date).center;
+
+  let html = "";
+  SERIES.forEach(s => {
+    const i = bisect(seriesData[s], x0);
+    const pt = seriesData[s][i];
+    if (!pt) return;
+    focusDots[s].style("display",null)
+      .attr("cx", xFocus(pt.date)).attr("cy", yFocus(pt.value));
+    html += `<span style="color:${color(s)}">${s}</span>: <strong>${pt.value}</strong><br>`;
+  });
+
+  const date = seriesData[SERIES[0]][bisect(seriesData[SERIES[0]], x0)]?.date;
+  const cx = date ? xFocus(date) : mx;
+  vLine.style("display",null).attr("x1",cx).attr("x2",cx);
+  tooltip.html(`${date ? d3.timeFormat("%b %d, %Y")(date) : ""}<br>${html}`)
+    .style("opacity",1).style("left",(event.clientX+14)+"px").style("top",(event.clientY-40)+"px");
+}).on("mouseleave", () => {
+  SERIES.forEach(s => focusDots[s].style("display","none"));
+  vLine.style("display","none");
+  tooltip.style("opacity",0);
+});
+
+// ── Brush ─────────────────────────────────────────────────────────────────
+function updateFocus(newXDomain) {
+  xFocus.domain(newXDomain);
+  SERIES.forEach(s => {
+    focusPaths[s].attr("d", focusLineGen(s));
+  });
+  xFocusAxisG.call(d3.axisBottom(xFocus).ticks(10).tickFormat(d3.timeFormat("%b '%y")));
+  gridG.call(d3.axisLeft(yFocus).ticks(5).tickSize(-innerW).tickFormat(""))
+    .call(a => a.select(".domain").remove())
+    .call(a => a.selectAll(".tick line").attr("stroke","#eee"));
+  const fmt = d3.timeFormat("%b %d, %Y");
+  rangeLabel.text(`${fmt(newXDomain[0])} – ${fmt(newXDomain[1])}`);
+}
+
+const brush = d3.brushX()
+  .extent([[0,0],[innerW,ctxIH]])
+  .on("brush end", ({ selection, sourceEvent }) => {
+    if (!selection || !sourceEvent) return;
+    const [x0, x1] = selection.map(xContext.invert);
+    updateFocus([x0, x1]);
+  });
+
+const brushG = ctxG.append("g").call(brush);
+// Default selection: last 3 months
+const defaultEnd   = allDates[allDates.length - 1];
+const defaultStart = d3.timeMonth.offset(defaultEnd, -3);
+brushG.call(brush.move, [xContext(defaultStart), xContext(defaultEnd)]);
+
+// ── Zoom on focus ─────────────────────────────────────────────────────────
+const zoom = d3.zoom()
+  .scaleExtent([1, 60])
+  .translateExtent([[0,0],[innerW, focusIH]])
+  .extent([[0,0],[innerW, focusIH]])
+  .on("zoom", ({ transform, sourceEvent }) => {
+    if (!sourceEvent) return;
+    const newX = transform.rescaleX(xContext);
+    xFocus.domain(newX.domain());
+    SERIES.forEach(s => focusPaths[s].attr("d", focusLineGen(s)));
+    xFocusAxisG.call(d3.axisBottom(xFocus).ticks(10).tickFormat(d3.timeFormat("%b '%y")));
+    brushG.call(brush.move, xFocus.range().map(xContext));
+    const fmt = d3.timeFormat("%b %d, %Y");
+    rangeLabel.text(`${fmt(xFocus.domain()[0])} – ${fmt(xFocus.domain()[1])}`);
+  });
+
+overlay.call(zoom);
+</script>
+</body>
+</html>

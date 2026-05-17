@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Zoomable Treemap — snow-d3 example 09</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f0f0f0; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; cursor: pointer; }
+    .breadcrumb { font-size: 13px; color: #555; margin-bottom: 10px; user-select: none; }
+    .breadcrumb span { cursor: pointer; color: #3b82f6; }
+    .breadcrumb span:last-child { color: #333; cursor: default; font-weight: 600; }
+    .breadcrumb span:not(:last-child):hover { text-decoration: underline; }
+    .leaf-label { pointer-events: none; dominant-baseline: hanging; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Zoomable Treemap</h1>
+<p class="desc">Click any cell to zoom in. Click the breadcrumb or background to zoom out.<br>Uses <code>d3.treemap()</code>, <code>treemapSquarify</code>, <code>d3.hierarchy()</code>, <code>scaleSequential</code>.</p>
+<div class="breadcrumb" id="breadcrumb"></div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const data = {
+  name: "Tech Stack", value: 0,
+  children: [
+    { name: "Frontend", children: [
+      { name: "React", value: 320 }, { name: "Vue", value: 180 },
+      { name: "Angular", value: 140 }, { name: "Svelte", value: 80 },
+      { name: "Next.js", value: 210 }, { name: "Nuxt", value: 90 },
+    ]},
+    { name: "Backend", children: [
+      { name: "Node.js", value: 280 }, { name: "Python", value: 260 },
+      { name: "Go", value: 190 }, { name: "Rust", value: 120 },
+      { name: "Java", value: 200 }, { name: "Ruby", value: 70 },
+      { name: ".NET", value: 160 },
+    ]},
+    { name: "Database", children: [
+      { name: "PostgreSQL", value: 230 }, { name: "MySQL", value: 180 },
+      { name: "MongoDB", value: 200 }, { name: "Redis", value: 140 },
+      { name: "Cassandra", value: 90 }, { name: "SQLite", value: 60 },
+    ]},
+    { name: "Cloud", children: [
+      { name: "AWS", value: 340 }, { name: "GCP", value: 220 },
+      { name: "Azure", value: 200 }, { name: "Vercel", value: 110 },
+      { name: "Fly.io", value: 60 },
+    ]},
+    { name: "DevOps", children: [
+      { name: "Docker", value: 250 }, { name: "K8s", value: 200 },
+      { name: "Terraform", value: 130 }, { name: "GitHub Actions", value: 180 },
+      { name: "Ansible", value: 80 },
+    ]},
+    { name: "ML / AI", children: [
+      { name: "TensorFlow", value: 200 }, { name: "PyTorch", value: 240 },
+      { name: "Scikit-learn", value: 150 }, { name: "Hugging Face", value: 120 },
+      { name: "ONNX", value: 70 },
+    ]},
+  ]
+};
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 880, height = 540;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const format = d3.format(",d");
+
+// ── Hierarchy ─────────────────────────────────────────────────────────────
+const root = d3.hierarchy(data)
+  .sum(d => d.value)
+  .sort((a,b) => b.value - a.value);
+
+const treemap = d3.treemap()
+  .tile(d3.treemapSquarify)
+  .size([width, height])
+  .paddingOuter(6)
+  .paddingTop(22)
+  .paddingInner(2)
+  .round(true);
+
+treemap(root);
+
+// ── Color ─────────────────────────────────────────────────────────────────
+const topNames = root.children.map(d => d.data.name);
+const colorBase = d3.scaleOrdinal(d3.schemeTableau10).domain(topNames);
+
+function colorFor(d) {
+  let node = d;
+  while (node.depth > 1) node = node.parent;
+  return colorBase(node.data.name);
+}
+
+// ── Render helpers ────────────────────────────────────────────────────────
+const tooltip = d3.select("#tooltip");
+let currentRoot = root;
+
+function breadcrumb(node) {
+  const ancestors = node.ancestors().reverse();
+  const crumb = d3.select("#breadcrumb");
+  crumb.selectAll("*").remove();
+  ancestors.forEach((d, i) => {
+    const sp = crumb.append("span").text(d.data.name);
+    if (i < ancestors.length - 1) {
+      sp.on("click", () => zoom(d));
+      crumb.append("span").text(" / ").style("color","#bbb").style("cursor","default");
+    }
+  });
+}
+
+// ── Draw ──────────────────────────────────────────────────────────────────
+function draw(zoomNode) {
+  currentRoot = zoomNode;
+  breadcrumb(zoomNode);
+
+  const descendants = zoomNode === root
+    ? root.descendants()
+    : zoomNode.descendants();
+
+  const x = d3.scaleLinear().domain([zoomNode.x0, zoomNode.x1]).range([0, width]);
+  const y = d3.scaleLinear().domain([zoomNode.y0, zoomNode.y1]).range([0, height]);
+
+  svg.selectAll("*").remove();
+
+  const cell = svg.selectAll("g")
+    .data(descendants.filter(d => d !== zoomNode || d === root))
+    .join("g")
+      .attr("transform", d => `translate(${x(d.x0)},${y(d.y0)})`)
+      .attr("cursor", d => d.children ? "pointer" : "default");
+
+  // Rectangles
+  cell.append("rect")
+    .attr("width",  d => Math.max(0, x(d.x1) - x(d.x0) - 1))
+    .attr("height", d => Math.max(0, y(d.y1) - y(d.y0) - 1))
+    .attr("rx", 2)
+    .attr("fill", d => {
+      if (d === zoomNode) return "#f0f0f0";
+      const base = colorFor(d);
+      return d.children
+        ? d3.color(base).copy({ opacity: 0.18 })
+        : d3.color(base).copy({ opacity: 0.7 });
+    })
+    .attr("stroke", d => d.children ? colorFor(d) : "none")
+    .attr("stroke-width", 1.5)
+    .on("mouseover", (event, d) => {
+      if (!d.children) {
+        tooltip.html(
+          `<strong>${d.data.name}</strong><br>` +
+          `Category: ${d.parent?.data.name}<br>` +
+          `Value: ${format(d.value)}<br>` +
+          `Share: ${(d.value / root.value * 100).toFixed(1)}%`
+        ).style("opacity",1);
+      }
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout", () => tooltip.style("opacity",0))
+    .on("click", (event, d) => {
+      event.stopPropagation();
+      if (d.children) zoom(d);
+    });
+
+  // Parent label (header)
+  cell.filter(d => d.children && d !== zoomNode)
+    .append("text")
+      .attr("x", 4).attr("y", 15)
+      .style("font-size","12px").style("font-weight","600")
+      .style("fill", d => colorFor(d))
+      .text(d => {
+        const w = x(d.x1) - x(d.x0);
+        return w > 60 ? d.data.name : "";
+      });
+
+  // Leaf label
+  cell.filter(d => !d.children)
+    .append("text")
+      .attr("class","leaf-label")
+      .attr("x", 4).attr("y", 4)
+      .style("font-size","11px")
+      .style("fill", d => {
+        const c = d3.color(colorFor(d));
+        return c ? c.darker(2) : "#333";
+      })
+      .each(function(d) {
+        const w = x(d.x1) - x(d.x0);
+        const h = y(d.y1) - y(d.y0);
+        if (w < 30 || h < 20) return;
+        d3.select(this).text(d.data.name);
+        if (h > 30) {
+          d3.select(this.parentNode).append("text")
+            .attr("class","leaf-label")
+            .attr("x",4).attr("y",18)
+            .style("font-size","10px")
+            .style("fill","#666")
+            .text(w > 50 ? format(d.value) : "");
+        }
+      });
+}
+
+function zoom(node) {
+  if (node === currentRoot && node !== root) {
+    zoom(node.parent || root);
+    return;
+  }
+  draw(node);
+}
+
+// Click background = zoom out
+svg.on("click", () => {
+  if (currentRoot !== root && currentRoot.parent) zoom(currentRoot.parent);
+});
+
+draw(root);
+</script>
+</body>
+</html>

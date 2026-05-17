@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Animated Transitions — snow-d3 example 12</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; align-items: center; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+    label { font-size: 13px; color: #555; }
+    select { padding: 4px 8px; border: 1px solid #bbb; border-radius: 4px; font-size: 13px; }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .grid .tick line { stroke: #eee; }
+    .grid .domain { display: none; }
+    .bar-enter { opacity: 0; }
+    .bar-exit  { opacity: 0; }
+    .value-label { font-size: 11px; fill: #fff; text-anchor: middle; pointer-events: none; }
+  </style>
+</head>
+<body>
+<h1>D3 Animated Transitions</h1>
+<p class="desc">Demonstrates enter/update/exit patterns with various easing functions and stagger delays.<br>Click buttons to trigger different transition modes and easings.</p>
+<div class="controls">
+  <button id="btn-shuffle">Shuffle Data</button>
+  <button id="btn-add">Add Item</button>
+  <button id="btn-remove">Remove Item</button>
+  <button id="btn-sort">Sort</button>
+  <button id="btn-animate">Auto-Animate</button>
+  <label>Easing:
+    <select id="sel-ease">
+      <option value="easeCubicOut">Cubic</option>
+      <option value="easeElasticOut">Elastic</option>
+      <option value="easeBounceOut">Bounce</option>
+      <option value="easeBackOut">Back</option>
+      <option value="easeExpOut">Exponential</option>
+      <option value="easeLinear">Linear</option>
+      <option value="easeSinInOut">Sine</option>
+    </select>
+  </label>
+  <label>Stagger: <input type="range" id="range-stagger" min="0" max="150" value="40" style="width:100px"> <span id="stagger-val">40</span>ms</label>
+</div>
+<div id="chart"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const COLORS = d3.schemeTableau10;
+let nextId = 0;
+function mkItem() {
+  return { id: nextId++, value: Math.round(Math.random()*90+10) };
+}
+let data = d3.range(10).map(() => mkItem());
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 760, height = 400;
+const margin = { top: 20, right: 20, bottom: 50, left: 50 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+const xScale = d3.scaleBand().range([0,innerW]).padding(0.2);
+const yScale = d3.scaleLinear().range([innerH,0]);
+
+const xAxisG = g.append("g").attr("class","axis x-axis").attr("transform",`translate(0,${innerH})`);
+const yAxisG = g.append("g").attr("class","axis y-axis");
+const gridG  = g.append("g").attr("class","axis grid");
+
+// ── Easing map ────────────────────────────────────────────────────────────
+const EASES = {
+  easeCubicOut:   d3.easeCubicOut,
+  easeElasticOut: d3.easeElasticOut,
+  easeBounceOut:  d3.easeBounceOut,
+  easeBackOut:    d3.easeBackOut,
+  easeExpOut:     d3.easeExpOut,
+  easeLinear:     d3.easeLinear,
+  easeSinInOut:   d3.easeSinInOut,
+};
+
+let easeKey  = "easeCubicOut";
+let stagger  = 40;
+let sorted   = false;
+let animTimer = null;
+
+// ── Render ─────────────────────────────────────────────────────────────────
+function render(animate = true) {
+  const displayData = sorted ? [...data].sort((a,b) => b.value - a.value) : data;
+  const dur = 500;
+  const ease = EASES[easeKey];
+
+  xScale.domain(displayData.map(d => d.id));
+  yScale.domain([0, d3.max(displayData, d => d.value)]).nice();
+
+  gridG.transition().duration(animate ? dur : 0)
+    .call(d3.axisLeft(yScale).ticks(5).tickSize(-innerW).tickFormat(""))
+    .call(a => a.select(".domain").remove())
+    .call(a => a.selectAll(".tick line").attr("stroke","#eee"));
+
+  xAxisG.transition().duration(animate ? dur : 0)
+    .call(d3.axisBottom(xScale).tickFormat(d => `#${d}`));
+  yAxisG.transition().duration(animate ? dur : 0)
+    .call(d3.axisLeft(yScale).ticks(5));
+
+  // Data join with key
+  const bars = g.selectAll(".bar-group")
+    .data(displayData, d => d.id);
+
+  // ENTER
+  const entered = bars.enter().append("g")
+    .attr("class","bar-group")
+    .attr("opacity", 0)
+    .attr("transform", d => `translate(${xScale(d.id)},${innerH})`);
+
+  entered.append("rect")
+    .attr("width", xScale.bandwidth())
+    .attr("height", 0)
+    .attr("rx", 3)
+    .attr("fill", d => COLORS[d.id % COLORS.length]);
+
+  entered.append("text").attr("class","value-label")
+    .attr("x", xScale.bandwidth()/2)
+    .attr("y", -4)
+    .text(d => d.value);
+
+  // EXIT
+  bars.exit()
+    .each(function(_, i) {
+      d3.select(this).transition().duration(dur/2)
+        .delay(i * stagger/2)
+        .attr("opacity",0)
+        .attr("transform", `translate(${-50},${innerH})`)
+        .remove();
+    });
+
+  // ENTER + UPDATE merged
+  const merged = entered.merge(bars);
+
+  merged.each(function(d, i) {
+    d3.select(this).transition()
+      .duration(animate ? dur : 0)
+      .delay(animate ? i * stagger : 0)
+      .ease(ease)
+      .attr("opacity", 1)
+      .attr("transform", `translate(${xScale(d.id)},0)`);
+
+    d3.select(this).select("rect")
+      .transition()
+      .duration(animate ? dur : 0)
+      .delay(animate ? i * stagger : 0)
+      .ease(ease)
+      .attr("y", yScale(d.value))
+      .attr("width", xScale.bandwidth())
+      .attr("height", innerH - yScale(d.value))
+      .attr("fill", COLORS[d.id % COLORS.length]);
+
+    d3.select(this).select("text")
+      .transition()
+      .duration(animate ? dur : 0)
+      .delay(animate ? i * stagger : 0)
+      .ease(ease)
+      .attr("x", xScale.bandwidth()/2)
+      .attr("y", yScale(d.value) + 16)
+      .attr("opacity", innerH - yScale(d.value) > 20 ? 1 : 0)
+      .text(d.value);
+  });
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────
+d3.select("#btn-shuffle").on("click", () => {
+  data.forEach(d => { d.value = Math.round(Math.random()*90+10); });
+  render();
+});
+d3.select("#btn-add").on("click", () => {
+  if (data.length < 16) { data.push(mkItem()); render(); }
+});
+d3.select("#btn-remove").on("click", () => {
+  if (data.length > 2) {
+    const i = Math.floor(Math.random()*data.length);
+    data.splice(i,1);
+    render();
+  }
+});
+d3.select("#btn-sort").on("click", () => { sorted = !sorted; render(); });
+d3.select("#sel-ease").on("change", function() { easeKey = this.value; render(); });
+d3.select("#range-stagger").on("input", function() {
+  stagger = +this.value;
+  d3.select("#stagger-val").text(stagger);
+});
+d3.select("#btn-animate").on("click", function() {
+  if (animTimer) {
+    animTimer.stop(); animTimer = null;
+    d3.select(this).text("Auto-Animate").classed("active", false);
+  } else {
+    d3.select(this).text("Stop").classed("active", true);
+    animTimer = d3.interval(() => {
+      data.forEach(d => { d.value = Math.round(Math.random()*90+10); });
+      render();
+    }, 1200);
+  }
+});
+
+render(false);
+</script>
+</body>
+</html>

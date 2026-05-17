@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Multi-Series Line Chart — snow-d3 example 02</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .line { fill: none; stroke-width: 2.5; }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ccc; }
+    .grid .tick line { stroke: #e8e8e8; }
+    .grid .domain { display: none; }
+    .hover-dot { fill: white; stroke-width: 2.5; }
+    .crosshair { stroke: #999; stroke-width: 1; stroke-dasharray: 4,3; pointer-events: none; }
+    .legend-item { cursor: pointer; }
+    .legend-item.hidden .legend-swatch { opacity: 0.25; }
+    .legend-item.hidden .legend-label { text-decoration: line-through; opacity: 0.4; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      min-width: 140px; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Multi-Series Line Chart</h1>
+<p class="desc">Time-series line chart with multiple series, crosshair, Voronoi hover, and toggleable legend. Uses <code>scaleTime</code>, <code>line()</code>, <code>curveMonotoneX</code>.</p>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Synthetic time-series data ────────────────────────────────────────────
+const SERIES = ["Alpha", "Beta", "Gamma", "Delta"];
+const color  = d3.scaleOrdinal(d3.schemeTableau10).domain(SERIES);
+
+const parseDate = d3.timeParse("%Y-%m-%d");
+const start = new Date(2022, 0, 1);
+const N = 52; // weeks
+
+function genSeries(seed, amp, offset) {
+  let val = offset;
+  return d3.range(N).map((_, i) => {
+    val += (Math.random() - 0.48) * amp;
+    val  = Math.max(5, Math.min(195, val));
+    return { date: d3.timeWeek.offset(start, i), value: +val.toFixed(1) };
+  });
+}
+
+const seriesData = {
+  Alpha: genSeries(1, 12, 80),
+  Beta:  genSeries(2, 10, 60),
+  Gamma: genSeries(3, 14, 100),
+  Delta: genSeries(4,  8, 45),
+};
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 760, height = 440;
+const margin = { top: 20, right: 20, bottom: 50, left: 55 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+// ── Scales ────────────────────────────────────────────────────────────────
+const allDates  = seriesData[SERIES[0]].map(d => d.date);
+const allValues = SERIES.flatMap(s => seriesData[s].map(d => d.value));
+
+const xScale = d3.scaleTime()
+  .domain(d3.extent(allDates))
+  .range([0, innerW]);
+
+const yScale = d3.scaleLinear()
+  .domain([0, d3.max(allValues)]).nice()
+  .range([innerH, 0]);
+
+// ── Axes ──────────────────────────────────────────────────────────────────
+g.append("g").attr("class","axis grid")
+  .call(d3.axisLeft(yScale).ticks(6).tickSize(-innerW).tickFormat(""))
+  .call(ax => ax.select(".domain").remove());
+
+g.append("g").attr("class","axis x-axis")
+  .attr("transform",`translate(0,${innerH})`)
+  .call(d3.axisBottom(xScale).ticks(d3.timeMonth.every(2)).tickFormat(d3.timeFormat("%b '%y")));
+
+g.append("g").attr("class","axis y-axis")
+  .call(d3.axisLeft(yScale).ticks(6));
+
+// Axis labels
+svg.append("text")
+  .attr("x", margin.left + innerW/2).attr("y", height - 6)
+  .attr("text-anchor","middle").style("font-size","12px").style("fill","#777")
+  .text("Week");
+svg.append("text")
+  .attr("transform","rotate(-90)")
+  .attr("x", -(margin.top + innerH/2)).attr("y", 15)
+  .attr("text-anchor","middle").style("font-size","12px").style("fill","#777")
+  .text("Value");
+
+// ── Line generator ────────────────────────────────────────────────────────
+const lineGen = d3.line()
+  .x(d => xScale(d.date))
+  .y(d => yScale(d.value))
+  .curve(d3.curveMonotoneX);
+
+const hidden = new Set();
+
+const paths = {};
+SERIES.forEach(name => {
+  paths[name] = g.append("path")
+    .attr("class","line")
+    .attr("stroke", color(name))
+    .attr("d", lineGen(seriesData[name]));
+});
+
+// ── Hover dots ────────────────────────────────────────────────────────────
+const dots = {};
+SERIES.forEach(name => {
+  dots[name] = g.append("circle")
+    .attr("class","hover-dot")
+    .attr("r", 5)
+    .attr("stroke", color(name))
+    .style("display","none");
+});
+
+// ── Crosshair ─────────────────────────────────────────────────────────────
+const crossX = g.append("line").attr("class","crosshair").style("display","none")
+  .attr("y1",0).attr("y2",innerH);
+const crossY = g.append("line").attr("class","crosshair").style("display","none")
+  .attr("x1",0).attr("x2",innerW);
+
+// ── Legend ────────────────────────────────────────────────────────────────
+const legend = svg.append("g")
+  .attr("transform",`translate(${margin.left + innerW - 80},${margin.top + 10})`);
+
+SERIES.forEach((name, i) => {
+  const li = legend.append("g").attr("class","legend-item")
+    .attr("transform",`translate(0,${i * 22})`)
+    .style("cursor","pointer")
+    .on("click", () => toggleSeries(name, li));
+
+  li.append("rect").attr("class","legend-swatch")
+    .attr("width",14).attr("height",3).attr("y",-1.5)
+    .attr("rx",2).attr("fill", color(name));
+
+  li.append("text").attr("class","legend-label")
+    .attr("x",20).attr("y",4)
+    .style("font-size","12px").style("fill","#333")
+    .text(name);
+});
+
+function toggleSeries(name, li) {
+  if (hidden.has(name)) {
+    hidden.delete(name);
+    paths[name].style("opacity",1).style("pointer-events","all");
+    dots[name].style("display","none");
+    li.classed("hidden", false);
+  } else {
+    hidden.add(name);
+    paths[name].style("opacity",0.1).style("pointer-events","none");
+    dots[name].style("display","none");
+    li.classed("hidden", true);
+  }
+}
+
+// ── Interaction (Voronoi-nearest) ─────────────────────────────────────────
+const tooltip = d3.select("#tooltip");
+const allPoints = SERIES.flatMap(s => seriesData[s].map(d => ({ ...d, series: s })));
+const delaunay = d3.Delaunay.from(allPoints, d => xScale(d.date), d => yScale(d.value));
+
+const overlay = g.append("rect")
+  .attr("width", innerW).attr("height", innerH)
+  .attr("fill","none").attr("pointer-events","all");
+
+overlay
+  .on("mousemove", (event) => {
+    const [mx, my] = d3.pointer(event);
+    const idx = delaunay.find(mx, my);
+    const pt  = allPoints[idx];
+    if (!pt || hidden.has(pt.series)) return;
+
+    const cx = xScale(pt.date), cy = yScale(pt.value);
+
+    crossX.style("display",null).attr("x1",cx).attr("x2",cx);
+    crossY.style("display",null).attr("y1",cy).attr("y2",cy);
+
+    SERIES.forEach(s => {
+      if (s === pt.series && !hidden.has(s)) {
+        dots[s].style("display",null).attr("cx",cx).attr("cy",cy);
+      } else {
+        dots[s].style("display","none");
+      }
+    });
+
+    const fmt = d3.timeFormat("%b %d, %Y");
+    tooltip.html(
+      `<strong style="color:${color(pt.series)}">${pt.series}</strong><br>` +
+      `${fmt(pt.date)}<br>Value: <strong>${pt.value}</strong>`
+    ).style("opacity",1)
+     .style("left",(event.clientX+14)+"px")
+     .style("top",(event.clientY-32)+"px");
+  })
+  .on("mouseleave", () => {
+    crossX.style("display","none");
+    crossY.style("display","none");
+    SERIES.forEach(s => dots[s].style("display","none"));
+    tooltip.style("opacity",0);
+  });
+</script>
+</body>
+</html>

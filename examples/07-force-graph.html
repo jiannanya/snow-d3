@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Force-Directed Graph — snow-d3 example 07</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #1a1a2e; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #e0e0e0; }
+    p.desc { font-size: 0.85rem; color: #999; margin-bottom: 20px; text-align: center; }
+    #chart { background: #16213e; border-radius: 8px; box-shadow: 0 2px 16px rgba(0,0,0,0.4); }
+    .node { cursor: grab; }
+    .node:active { cursor: grabbing; }
+    .node circle { stroke-width: 2; transition: r 0.1s; }
+    .node text { font-size: 11px; fill: #ddd; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+    .link { stroke-opacity: 0.5; }
+    .link.highlighted { stroke-opacity: 1; }
+    .node.dimmed circle { opacity: 0.15; }
+    .node.dimmed text  { opacity: 0.1; }
+    .link.dimmed { stroke-opacity: 0.05; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #444; border-radius: 4px; background: #2a2a4a; color: #ccc; cursor: pointer; font-size: 13px; }
+    button:hover { background: #3a3a6a; }
+    .tooltip {
+      position: fixed; background: rgba(10,10,20,0.95); color: #e0e0e0;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      border: 1px solid #444; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Force-Directed Graph</h1>
+<p class="desc">Network graph with draggable nodes, click-to-highlight neighbors, zoom, and force controls.<br>Uses <code>forceSimulation</code>, <code>forceLink</code>, <code>forceManyBody</code>, <code>drag()</code>, <code>zoom()</code>.</p>
+<div class="controls">
+  <button id="btn-reheat">Reheat Simulation</button>
+  <button id="btn-reset">Reset Zoom</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Graph data ─────────────────────────────────────────────────────────────
+const GROUPS = 6;
+const NODES_PER_GROUP = 8;
+
+const nodes = [];
+const links = [];
+
+for (let g = 0; g < GROUPS; g++) {
+  for (let i = 0; i < NODES_PER_GROUP; i++) {
+    nodes.push({ id: `${g}-${i}`, group: g, label: `N${g}${i}` });
+  }
+}
+
+// Intra-group links (dense)
+for (let g = 0; g < GROUPS; g++) {
+  const ns = nodes.filter(n => n.group === g);
+  for (let i = 0; i < ns.length; i++) {
+    for (let j = i+1; j < ns.length; j++) {
+      if (Math.random() < 0.4) {
+        links.push({ source: ns[i].id, target: ns[j].id, weight: 1 });
+      }
+    }
+  }
+}
+
+// Inter-group links (sparse)
+for (let g = 0; g < GROUPS; g++) {
+  const ng = (g+1) % GROUPS;
+  const from = nodes.filter(n => n.group === g);
+  const to   = nodes.filter(n => n.group === ng);
+  for (let k = 0; k < 3; k++) {
+    links.push({
+      source: from[Math.floor(Math.random()*from.length)].id,
+      target: to[Math.floor(Math.random()*to.length)].id,
+      weight: 2
+    });
+  }
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 760, height = 540;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const zoomG = svg.append("g");
+
+// ── Color ─────────────────────────────────────────────────────────────────
+const color = d3.scaleOrdinal(d3.schemeTableau10);
+
+// ── Links ─────────────────────────────────────────────────────────────────
+const linkSel = zoomG.append("g").attr("class","links")
+  .selectAll("line")
+  .data(links)
+  .join("line")
+    .attr("class","link")
+    .attr("stroke", d => d.weight > 1 ? "#9b59b6" : "#4a90b5")
+    .attr("stroke-width", d => d.weight > 1 ? 2.5 : 1.5);
+
+// ── Nodes ─────────────────────────────────────────────────────────────────
+const tooltip = d3.select("#tooltip");
+
+const nodeSel = zoomG.append("g").attr("class","nodes")
+  .selectAll("g")
+  .data(nodes, d => d.id)
+  .join("g")
+    .attr("class","node")
+    .call(drag());
+
+nodeSel.append("circle")
+  .attr("r", 9)
+  .attr("fill", d => color(d.group))
+  .attr("stroke", d => d3.color(color(d.group)).brighter(1.2));
+
+nodeSel.append("text")
+  .attr("dy", "0.31em").attr("x", 13)
+  .text(d => d.label);
+
+// Tooltip
+nodeSel
+  .on("mouseover", (event, d) => {
+    const deg = links.filter(l =>
+      (typeof l.source==="object" ? l.source.id : l.source) === d.id ||
+      (typeof l.target==="object" ? l.target.id : l.target) === d.id
+    ).length;
+    tooltip.html(
+      `<strong style="color:${color(d.group)}">${d.label}</strong><br>` +
+      `Group: ${d.group}<br>Degree: ${deg}`
+    ).style("opacity",1);
+  })
+  .on("mousemove", event => {
+    tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+  })
+  .on("mouseout", () => tooltip.style("opacity",0))
+  .on("click", (event, d) => highlightNeighborhood(d, event));
+
+// ── Highlight ─────────────────────────────────────────────────────────────
+let highlighted = null;
+function highlightNeighborhood(d, event) {
+  event.stopPropagation();
+  if (highlighted === d.id) {
+    highlighted = null;
+    nodeSel.classed("dimmed", false);
+    linkSel.classed("dimmed", false).classed("highlighted", false);
+    return;
+  }
+  highlighted = d.id;
+
+  const neighbors = new Set([d.id]);
+  links.forEach(l => {
+    const s = typeof l.source==="object" ? l.source.id : l.source;
+    const t = typeof l.target==="object" ? l.target.id : l.target;
+    if (s === d.id) neighbors.add(t);
+    if (t === d.id) neighbors.add(s);
+  });
+
+  nodeSel.classed("dimmed", n => !neighbors.has(n.id));
+  linkSel
+    .classed("dimmed", l => {
+      const s = typeof l.source==="object" ? l.source.id : l.source;
+      const t = typeof l.target==="object" ? l.target.id : l.target;
+      return !(neighbors.has(s) && neighbors.has(t));
+    })
+    .classed("highlighted", l => {
+      const s = typeof l.source==="object" ? l.source.id : l.source;
+      const t = typeof l.target==="object" ? l.target.id : l.target;
+      return neighbors.has(s) && neighbors.has(t);
+    });
+}
+
+svg.on("click", () => {
+  highlighted = null;
+  nodeSel.classed("dimmed", false);
+  linkSel.classed("dimmed", false).classed("highlighted", false);
+});
+
+// ── Simulation ────────────────────────────────────────────────────────────
+const simulation = d3.forceSimulation(nodes)
+  .force("link", d3.forceLink(links).id(d => d.id).distance(80).strength(0.6))
+  .force("charge", d3.forceManyBody().strength(-220))
+  .force("center", d3.forceCenter(width/2, height/2))
+  .force("x", d3.forceX(width/2).strength(0.03))
+  .force("y", d3.forceY(height/2).strength(0.03))
+  .force("collide", d3.forceCollide(16))
+  .on("tick", ticked);
+
+function ticked() {
+  linkSel
+    .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+    .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+  nodeSel.attr("transform", d => `translate(${d.x},${d.y})`);
+}
+
+// ── Drag ──────────────────────────────────────────────────────────────────
+function drag() {
+  return d3.drag()
+    .on("start", (event, d) => {
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      d.fx = d.x; d.fy = d.y;
+    })
+    .on("drag", (event, d) => { d.fx = event.x; d.fy = event.y; })
+    .on("end", (event, d) => {
+      if (!event.active) simulation.alphaTarget(0);
+      d.fx = null; d.fy = null;
+    });
+}
+
+// ── Zoom ──────────────────────────────────────────────────────────────────
+const zoom = d3.zoom()
+  .scaleExtent([0.3, 4])
+  .on("zoom", event => zoomG.attr("transform", event.transform));
+svg.call(zoom);
+
+d3.select("#btn-reheat").on("click", () => simulation.alpha(0.5).restart());
+d3.select("#btn-reset").on("click", () => svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity));
+</script>
+</body>
+</html>

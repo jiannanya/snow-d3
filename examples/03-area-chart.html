@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Stacked Area Chart — snow-d3 example 03</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .area { opacity: 0.85; transition: opacity 0.2s; }
+    .area:hover { opacity: 1; }
+    .area-stroke { fill: none; stroke-width: 1.5; opacity: 0.6; }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .grid .tick line { stroke: #e8e8e8; }
+    .grid .domain { display: none; }
+    .legend-dot { cursor: pointer; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      line-height: 1.7;
+    }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+  </style>
+</head>
+<body>
+<h1>D3 Stacked Area Chart</h1>
+<p class="desc">Stacked area chart with streamgraph variant, animated toggle, hover tooltip. Uses <code>stack()</code>, <code>area()</code>, <code>curveCardinal</code>, <code>schemeTableau10</code>.</p>
+<div class="controls">
+  <button id="btn-stack" class="active">Stacked</button>
+  <button id="btn-stream">Streamgraph</button>
+  <button id="btn-expand">Normalized</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const CATS = ["Web", "Mobile", "Desktop", "IoT", "Cloud"];
+const color = d3.scaleOrdinal(d3.schemeTableau10).domain(CATS);
+
+const N = 24; // months
+const base = new Date(2022, 0, 1);
+
+function rng(s) {
+  // simple seeded pseudo-random
+  let n = s;
+  return () => { n = (n * 16807 + 0) % 2147483647; return (n - 1) / 2147483646; };
+}
+
+function genTable() {
+  const rows = [];
+  const states = Object.fromEntries(CATS.map((c,i) => [c, 20 + rng(i*7)()*40]));
+  for (let i = 0; i < N; i++) {
+    const row = { date: d3.timeMonth.offset(base, i) };
+    CATS.forEach(c => {
+      states[c] = Math.max(2, states[c] + (Math.random()-0.45)*10);
+      row[c] = +states[c].toFixed(1);
+    });
+    rows.push(row);
+  }
+  return rows;
+}
+const data = genTable();
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 760, height = 420;
+const margin = { top: 20, right: 20, bottom: 50, left: 55 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+// clip path
+svg.append("defs").append("clipPath").attr("id","clip")
+  .append("rect").attr("width",innerW).attr("height",innerH+1).attr("y",-1);
+const clipG = g.append("g").attr("clip-path","url(#clip)");
+
+// ── Scales ────────────────────────────────────────────────────────────────
+const xScale = d3.scaleTime()
+  .domain(d3.extent(data, d => d.date))
+  .range([0, innerW]);
+
+const yScale = d3.scaleLinear().range([innerH, 0]);
+
+// Axes
+const xAxisG = g.append("g").attr("class","axis x-axis").attr("transform",`translate(0,${innerH})`);
+const yAxisG = g.append("g").attr("class","axis y-axis");
+const gridG  = g.append("g").attr("class","axis grid");
+
+xAxisG.call(d3.axisBottom(xScale).ticks(d3.timeMonth.every(3)).tickFormat(d3.timeFormat("%b '%y")));
+
+// ── Stack generator ───────────────────────────────────────────────────────
+let offsetMode = d3.stackOffsetNone;
+let stackData = [];
+
+function computeStack() {
+  stackData = d3.stack().keys(CATS).offset(offsetMode)(data);
+}
+
+// ── Area generator ────────────────────────────────────────────────────────
+const areaGen = d3.area()
+  .x(d => xScale(d.data.date))
+  .y0(d => yScale(d[0]))
+  .y1(d => yScale(d[1]))
+  .curve(d3.curveCatmullRom.alpha(0.5));
+
+const lineGen = d3.line()
+  .x(d => xScale(d.data.date))
+  .y(d => yScale(d[1]))
+  .curve(d3.curveCatmullRom.alpha(0.5));
+
+// ── Render ────────────────────────────────────────────────────────────────
+function render(animate = true) {
+  computeStack();
+  const flatValues = stackData.flatMap(s => s.flatMap(d => [d[0], d[1]]));
+  yScale.domain([d3.min(flatValues), d3.max(flatValues)]).nice();
+
+  const dur = animate ? 600 : 0;
+
+  gridG.transition().duration(dur)
+    .call(d3.axisLeft(yScale).ticks(5).tickSize(-innerW).tickFormat(""))
+    .call(a => a.select(".domain").remove())
+    .call(a => a.selectAll(".tick line").attr("stroke","#e8e8e8"));
+
+  yAxisG.transition().duration(dur)
+    .call(d3.axisLeft(yScale).ticks(5).tickFormat(
+      offsetMode === d3.stackOffsetExpand ? d3.format(".0%") : d => d
+    ));
+
+  // Areas
+  clipG.selectAll(".area")
+    .data(stackData, d => d.key)
+    .join(
+      enter => enter.append("path").attr("class","area")
+        .attr("fill", d => color(d.key))
+        .attr("d", areaGen),
+      update => update,
+      exit => exit.remove()
+    )
+    .on("mouseover", (event, d) => {
+      const [mx] = d3.pointer(event, g.node());
+      const bisect = d3.bisector(p => p.data.date).left;
+      const x0 = xScale.invert(mx);
+      const i  = bisect(d, x0);
+      const pt = d[Math.max(0, Math.min(i, d.length-1))];
+      tooltip.html(
+        `<strong style="color:${color(d.key)}">${d.key}</strong><br>` +
+        `${d3.timeFormat("%b %Y")(pt.data.date)}<br>` +
+        `Value: <strong>${pt.data[d.key].toFixed(1)}</strong>`
+      ).style("opacity",1);
+    })
+    .on("mousemove", (event) => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout", () => tooltip.style("opacity",0))
+    .transition().duration(dur).attr("d", areaGen);
+}
+
+const tooltip = d3.select("#tooltip");
+
+// ── Legend ────────────────────────────────────────────────────────────────
+const legend = svg.append("g").attr("transform",`translate(${margin.left + innerW - 80},${margin.top + 5})`);
+CATS.forEach((c, i) => {
+  const li = legend.append("g").attr("transform",`translate(0,${i*22})`).attr("class","legend-dot");
+  li.append("circle").attr("r",7).attr("cy",-1).attr("fill",color(c));
+  li.append("text").attr("x",14).attr("y",4).style("font-size","12px").style("fill","#333").text(c);
+});
+
+// ── Controls ──────────────────────────────────────────────────────────────
+d3.select("#btn-stack").on("click", function() {
+  offsetMode = d3.stackOffsetNone;
+  setActive(this); render();
+});
+d3.select("#btn-stream").on("click", function() {
+  offsetMode = d3.stackOffsetWiggle;
+  setActive(this); render();
+});
+d3.select("#btn-expand").on("click", function() {
+  offsetMode = d3.stackOffsetExpand;
+  setActive(this); render();
+});
+function setActive(el) {
+  d3.selectAll("button").classed("active", false);
+  d3.select(el).classed("active", true);
+}
+
+render(false);
+</script>
+</body>
+</html>

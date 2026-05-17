@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Chord Diagram — snow-d3 example 14</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #1a1a2e; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #e0e0e0; }
+    p.desc { font-size: 0.85rem; color: #999; margin-bottom: 20px; text-align: center; }
+    #chart { background: #16213e; border-radius: 8px; box-shadow: 0 2px 16px rgba(0,0,0,0.4); }
+    .chord { transition: opacity 0.2s; cursor: pointer; }
+    .chord.dimmed { opacity: 0.05; }
+    .arc-path { cursor: pointer; transition: opacity 0.15s; }
+    .arc-path:hover { opacity: 0.85; }
+    .arc-label { fill: #ccc; font-size: 12px; pointer-events: none; }
+    .legend-item { cursor: pointer; }
+    .tooltip {
+      position: fixed; background: rgba(5,10,25,0.95); color: #e0e0e0;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      border: 1px solid #333; line-height: 1.6;
+    }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #444; border-radius: 4px; background: #2a2a4a; color: #ccc; cursor: pointer; font-size: 13px; }
+    button:hover { background: #3a3a6a; }
+  </style>
+</head>
+<body>
+<h1>D3 Chord Diagram</h1>
+<p class="desc">Hover over an arc or ribbon to highlight the flow. Click arc to pin highlight.<br>Uses <code>d3.chord()</code>, <code>d3.ribbon()</code>, <code>d3.arc()</code>, <code>schemeTableau10</code>.</p>
+<div class="controls">
+  <button id="btn-shuffle">Randomize Data</button>
+  <button id="btn-sort">Toggle Sort</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const NAMES = ["Web","Mobile","Cloud","AI/ML","Security","DevOps","Data Eng"];
+const N = NAMES.length;
+const color = d3.scaleOrdinal(d3.schemeTableau10).domain(d3.range(N));
+
+function makeMatrix() {
+  const m = Array.from({length:N}, () => Array(N).fill(0));
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      if (i === j) continue;
+      const base = Math.random() < 0.3 ? 0 : Math.round(Math.random() * 80 + 10);
+      m[i][j] = base;
+    }
+  }
+  return m;
+}
+
+let matrix = makeMatrix();
+let sortBySize = false;
+let pinnedGroup = null;
+
+// ── Dimensions ────────────────────────────────────────────────────────────
+const width = 640, height = 640;
+const outerRadius = Math.min(width, height) / 2 - 30;
+const innerRadius = outerRadius - 24;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${width/2},${height/2})`);
+const chordG = g.append("g");
+const arcG   = g.append("g");
+
+const tooltip = d3.select("#tooltip");
+
+// ── Chord layout ──────────────────────────────────────────────────────────
+function render(animate = true) {
+  const dur = animate ? 600 : 0;
+
+  const chord = d3.chordDirected()
+    .padAngle(0.05)
+    .sortSubgroups(d3.descending)
+    .sortChords(sortBySize ? d3.descending : null);
+
+  const chords = chord(matrix);
+
+  const arcGen = d3.arc()
+    .innerRadius(innerRadius).outerRadius(outerRadius);
+
+  const ribbonGen = d3.ribbonArrow()
+    .radius(innerRadius - 1)
+    .padAngle(0.001);
+
+  // ── Ribbons ────────────────────────────────────────────────────────────
+  const ribbons = chordG.selectAll(".chord")
+    .data(chords, d => `${d.source.index}-${d.target.index}`)
+    .join(
+      enter => enter.append("path").attr("class","chord")
+        .attr("fill-opacity", 0)
+        .attr("d", ribbonGen),
+      update => update,
+      exit => exit.transition().duration(dur/2).attr("fill-opacity",0).remove()
+    )
+    .attr("fill", d => color(d.target.index))
+    .attr("stroke", d => d3.color(color(d.target.index)).darker(0.5))
+    .attr("stroke-width", 0.5)
+    .on("mouseover", (event, d) => {
+      if (pinnedGroup !== null) return;
+      highlightGroup(d.source.index, d.target.index);
+      tooltip.html(
+        `<strong style="color:${color(d.source.index)}">${NAMES[d.source.index]}</strong>` +
+        ` → <strong style="color:${color(d.target.index)}">${NAMES[d.target.index]}</strong><br>` +
+        `Flow: ${d.source.value}`
+      ).style("opacity",1);
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout", () => { if (pinnedGroup === null) clearHighlight(); tooltip.style("opacity",0); })
+    .transition().duration(dur)
+      .attr("fill-opacity", 0.7)
+      .attr("d", ribbonGen);
+
+  // ── Arcs ──────────────────────────────────────────────────────────────
+  const arcs = arcG.selectAll(".arc-group")
+    .data(chords.groups, d => d.index)
+    .join(
+      enter => {
+        const ag = enter.append("g").attr("class","arc-group");
+        ag.append("path").attr("class","arc-path");
+        ag.append("text").attr("class","arc-label");
+        return ag;
+      },
+      update => update,
+      exit => exit.remove()
+    );
+
+  arcs.select(".arc-path")
+    .attr("fill", d => color(d.index))
+    .attr("stroke", d => d3.color(color(d.index)).darker(0.5))
+    .on("mouseover", (event, d) => {
+      if (pinnedGroup !== null) return;
+      highlightGroup(d.index);
+      const total = d3.sum(matrix[d.index]);
+      tooltip.html(
+        `<strong style="color:${color(d.index)}">${NAMES[d.index]}</strong><br>` +
+        `Total outflow: ${total}`
+      ).style("opacity",1);
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout", () => { if (pinnedGroup === null) clearHighlight(); tooltip.style("opacity",0); })
+    .on("click", (event, d) => {
+      if (pinnedGroup === d.index) {
+        pinnedGroup = null; clearHighlight();
+      } else {
+        pinnedGroup = d.index;
+        highlightGroup(d.index);
+      }
+    })
+    .transition().duration(dur)
+      .attr("d", arcGen);
+
+  arcs.select(".arc-label")
+    .transition().duration(dur)
+      .attr("transform", d => {
+        const angle = (d.startAngle + d.endAngle) / 2;
+        const r = outerRadius + 14;
+        return `translate(${Math.sin(angle)*r},${-Math.cos(angle)*r}) rotate(${angle*180/Math.PI - 90 + (angle > Math.PI ? 180 : 0)})`;
+      })
+      .attr("text-anchor", d => {
+        const angle = (d.startAngle + d.endAngle) / 2;
+        return angle > Math.PI ? "end" : "start";
+      })
+      .text(d => NAMES[d.index]);
+
+  // Bind ribbons reference for highlight
+  chordG._ribbons = ribbons;
+  arcG._arcs = arcs;
+}
+
+// ── Highlight ─────────────────────────────────────────────────────────────
+function highlightGroup(src, tgt) {
+  chordG.selectAll(".chord")
+    .classed("dimmed", d => {
+      if (tgt !== undefined) {
+        return !(d.source.index === src && d.target.index === tgt) &&
+               !(d.source.index === tgt && d.target.index === src);
+      }
+      return d.source.index !== src && d.target.index !== src;
+    });
+  arcG.selectAll(".arc-path")
+    .attr("fill-opacity", d => (tgt !== undefined)
+      ? (d.index === src || d.index === tgt ? 1 : 0.25)
+      : (d.index === src ? 1 : 0.25)
+    );
+}
+function clearHighlight() {
+  chordG.selectAll(".chord").classed("dimmed", false);
+  arcG.selectAll(".arc-path").attr("fill-opacity", 1);
+}
+
+svg.on("click", (event) => {
+  if (event.target === svg.node() || event.target.tagName === "svg") {
+    pinnedGroup = null; clearHighlight();
+  }
+});
+
+// ── Controls ──────────────────────────────────────────────────────────────
+d3.select("#btn-shuffle").on("click", () => { matrix = makeMatrix(); pinnedGroup = null; clearHighlight(); render(); });
+d3.select("#btn-sort").on("click", () => { sortBySize = !sortBySize; render(); });
+
+render(false);
+</script>
+</body>
+</html>

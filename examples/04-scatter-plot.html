@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Scatter Plot — snow-d3 example 04</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .dot { transition: r 0.1s; cursor: pointer; }
+    .dot:hover { stroke: #333; stroke-width: 2; }
+    .dot.selected { stroke: #000; stroke-width: 2; }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .grid .tick line { stroke: #eee; }
+    .grid .domain { display: none; }
+    .brush .selection { fill: rgba(59,130,246,0.15); stroke: #3b82f6; stroke-width: 1.5; rx: 3; }
+    .count-badge {
+      font-size: 12px; fill: #3b82f6; font-weight: 600;
+    }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      line-height: 1.6;
+    }
+    .legend-item { cursor: pointer; }
+  </style>
+</head>
+<body>
+<h1>D3 Scatter Plot</h1>
+<p class="desc">Interactive scatter plot with brush selection, size encoding, color categories, and hover tooltip. Uses <code>scaleLinear</code>, <code>scaleSqrt</code>, <code>brushX</code>, <code>Delaunay</code>.</p>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const GROUPS = ["Alpha","Beta","Gamma","Delta"];
+const color  = d3.scaleOrdinal(d3.schemeTableau10).domain(GROUPS);
+
+function makeData(n = 150) {
+  return d3.range(n).map(i => {
+    const g = GROUPS[i % GROUPS.length];
+    const cx = { Alpha:30, Beta:60, Gamma:75, Delta:45 }[g];
+    const cy = { Alpha:55, Beta:40, Gamma:70, Delta:25 }[g];
+    return {
+      id: i,
+      group: g,
+      x: cx + (Math.random()-0.5)*35,
+      y: cy + (Math.random()-0.5)*30,
+      size: Math.random() * 18 + 4,
+    };
+  });
+}
+const data = makeData();
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 760, height = 460;
+const margin = { top: 20, right: 20, bottom: 55, left: 55 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+// ── Scales ────────────────────────────────────────────────────────────────
+const xExt = d3.extent(data, d => d.x);
+const yExt = d3.extent(data, d => d.y);
+
+const xScale = d3.scaleLinear()
+  .domain([xExt[0]-5, xExt[1]+5]).nice().range([0, innerW]);
+const yScale = d3.scaleLinear()
+  .domain([yExt[0]-5, yExt[1]+5]).nice().range([innerH, 0]);
+const rScale = d3.scaleSqrt()
+  .domain([0, d3.max(data, d => d.size)]).range([3, 14]);
+
+// ── Grid + Axes ───────────────────────────────────────────────────────────
+g.append("g").attr("class","axis grid")
+  .call(d3.axisLeft(yScale).ticks(5).tickSize(-innerW).tickFormat(""))
+  .call(a => a.select(".domain").remove());
+g.append("g").attr("class","axis grid")
+  .attr("transform",`translate(0,${innerH})`)
+  .call(d3.axisBottom(xScale).ticks(8).tickSize(-innerH).tickFormat(""))
+  .call(a => a.select(".domain").remove());
+
+g.append("g").attr("class","axis x-axis")
+  .attr("transform",`translate(0,${innerH})`)
+  .call(d3.axisBottom(xScale).ticks(8));
+g.append("g").attr("class","axis y-axis")
+  .call(d3.axisLeft(yScale).ticks(5));
+
+// Axis labels
+svg.append("text")
+  .attr("x", margin.left + innerW/2).attr("y", height - 10)
+  .attr("text-anchor","middle").style("font-size","12px").style("fill","#777")
+  .text("X Variable");
+svg.append("text")
+  .attr("transform","rotate(-90)")
+  .attr("x",-(margin.top + innerH/2)).attr("y",15)
+  .attr("text-anchor","middle").style("font-size","12px").style("fill","#777")
+  .text("Y Variable");
+
+// ── Dots ──────────────────────────────────────────────────────────────────
+svg.append("defs").append("clipPath").attr("id","scatter-clip")
+  .append("rect").attr("width",innerW).attr("height",innerH);
+
+const dotsG = g.append("g").attr("clip-path","url(#scatter-clip)");
+const tooltip = d3.select("#tooltip");
+
+const dots = dotsG.selectAll(".dot")
+  .data(data, d => d.id)
+  .join("circle")
+    .attr("class","dot")
+    .attr("cx", d => xScale(d.x))
+    .attr("cy", d => yScale(d.y))
+    .attr("r",  d => rScale(d.size))
+    .attr("fill", d => color(d.group))
+    .attr("fill-opacity", 0.75)
+    .on("mouseover", (event, d) => {
+      tooltip.html(
+        `<strong style="color:${color(d.group)}">${d.group}</strong><br>` +
+        `x: ${d.x.toFixed(1)} &nbsp; y: ${d.y.toFixed(1)}<br>` +
+        `size: ${d.size.toFixed(1)}`
+      ).style("opacity",1);
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout", () => tooltip.style("opacity",0));
+
+// ── Brush ─────────────────────────────────────────────────────────────────
+const selectedCount = g.append("text").attr("class","count-badge")
+  .attr("x", innerW - 4).attr("y", -6).attr("text-anchor","end");
+
+const brush = d3.brush()
+  .extent([[0,0],[innerW,innerH]])
+  .on("brush end", ({ selection }) => {
+    if (!selection) {
+      dots.classed("selected", false).attr("fill-opacity",0.75);
+      selectedCount.text("");
+      return;
+    }
+    const [[x0,y0],[x1,y1]] = selection;
+    let count = 0;
+    dots.each(function(d) {
+      const cx = xScale(d.x), cy = yScale(d.y);
+      const sel = cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1;
+      d3.select(this).classed("selected", sel).attr("fill-opacity", sel ? 1 : 0.3);
+      if (sel) count++;
+    });
+    selectedCount.text(`${count} selected`);
+  });
+
+// brush layer behind dots
+const brushG = g.insert("g",":first-child").call(brush);
+
+// ── Legend ────────────────────────────────────────────────────────────────
+const legend = svg.append("g").attr("transform",`translate(${margin.left + 10},${margin.top + 10})`);
+GROUPS.forEach((gp, i) => {
+  const li = legend.append("g").attr("class","legend-item")
+    .attr("transform",`translate(0,${i * 22})`)
+    .on("click", () => {
+      const active = dotsG.selectAll(".dot").filter(d => d.group === gp);
+      const hidden = active.attr("display") === "none";
+      active.attr("display", hidden ? null : "none");
+    });
+  li.append("circle").attr("r",7).attr("cx",7).attr("cy",0)
+    .attr("fill",color(gp)).attr("fill-opacity",0.8);
+  li.append("text").attr("x",18).attr("y",4)
+    .style("font-size","12px").style("fill","#333").text(gp);
+});
+
+// Size legend
+const sizeLegend = svg.append("g")
+  .attr("transform",`translate(${margin.left + innerW - 10},${margin.top + innerH - 80})`);
+sizeLegend.append("text").attr("y",-8).attr("text-anchor","end")
+  .style("font-size","11px").style("fill","#888").text("size");
+[5,12,22].forEach((s,i) => {
+  const r = rScale(s);
+  sizeLegend.append("circle")
+    .attr("cx", -i*26).attr("cy", 0).attr("r", r)
+    .attr("fill","#aaa").attr("fill-opacity",0.4).attr("stroke","#999");
+  sizeLegend.append("text")
+    .attr("x",-i*26).attr("y", r+13)
+    .attr("text-anchor","middle").style("font-size","10px").style("fill","#888").text(s);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 World Choropleth — snow-d3 example 10</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #1a1a2e; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #e0e0e0; }
+    p.desc { font-size: 0.85rem; color: #999; margin-bottom: 20px; text-align: center; }
+    #chart { background: #0f3460; border-radius: 8px; box-shadow: 0 2px 16px rgba(0,0,0,0.5); overflow: hidden; }
+    .country { stroke: #0f3460; stroke-width: 0.5; transition: opacity 0.15s; cursor: pointer; }
+    .country:hover { opacity: 0.75; stroke: #fff; stroke-width: 1.5; }
+    .graticule { fill: none; stroke: rgba(255,255,255,0.06); stroke-width: 0.5; }
+    .sphere { fill: #0d2137; }
+    .legend-label { font-size: 11px; fill: #ccc; }
+    .tooltip {
+      position: fixed; background: rgba(5,10,25,0.95); color: #e0e0e0;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      border: 1px solid #333; line-height: 1.6;
+    }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    button { padding: 5px 14px; border: 1px solid #444; border-radius: 4px; background: #1e2a4a; color: #ccc; cursor: pointer; font-size: 13px; }
+    button:hover { background: #2e3a6a; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+    select { padding: 4px 8px; border: 1px solid #444; border-radius: 4px; background: #1e2a4a; color: #ccc; font-size: 13px; }
+  </style>
+</head>
+<body>
+<h1>D3 World Choropleth Map</h1>
+<p class="desc">World map with selectable color metric, projection switcher, and zoom/pan.<br>Uses <code>geoNaturalEarth1</code>, <code>geoPath</code>, <code>scaleSequential</code>, <code>interpolateYlOrRd</code>.</p>
+<div class="controls">
+  <label style="color:#ccc;font-size:13px">Projection:
+    <select id="sel-proj">
+      <option value="naturalEarth1">Natural Earth</option>
+      <option value="mercator">Mercator</option>
+      <option value="orthographic">Orthographic</option>
+      <option value="equalEarth">Equal Earth</option>
+    </select>
+  </label>
+  <label style="color:#ccc;font-size:13px">Metric:
+    <select id="sel-metric">
+      <option value="gdp">GDP per capita</option>
+      <option value="pop">Population</option>
+      <option value="area">Land Area</option>
+    </select>
+  </label>
+  <button id="btn-reset">Reset Zoom</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Synthetic country data ────────────────────────────────────────────────
+// Real app would fetch topojson; here we use synthetic values keyed by ISO 3166-1 numeric
+const metrics = {
+  gdp: {
+    label: "GDP per capita (USD)",
+    scheme: d3.interpolateYlOrRd,
+    data: {
+      "004":800,"008":5800,"012":3600,"024":3000,"036":55000,"040":50000,
+      "050":2300,"056":46000,"076":9000,"100":9200,"124":46000,"152":15000,
+      "156":12500,"170":6200,"191":15000,"192":8700,"203":23000,"208":60000,
+      "276":48000,"288":2400,"300":18500,"320":4500,"356":2200,"360":4100,
+      "364":5700,"368":5600,"372":80000,"376":43000,"380":34000,"392":42000,
+      "400":10500,"404":1900,"408":1700,"410":31500,"422":7800,"440":19000,
+      "458":11700,"484":9400,"504":3400,"528":56000,"566":2100,"578":82000,
+      "586":1500,"604":6800,"616":16000,"620":23000,"630":12000,"634":62000,
+      "642":13000,"643":11800,"702":65000,"710":6100,"724":30000,"752":55000,
+      "756":84000,"764":7500,"788":3500,"792":9500,"800":800,"804":3700,
+      "826":42000,"840":63000,"858":16500,"860":1900,"862":5000,"704":2700,
+      "716":2100,"032":10700,"218":6100,"266":7000,"288":2400,"072":7900
+    }
+  },
+  pop: {
+    label: "Population (millions)",
+    scheme: d3.interpolatePuBu,
+    data: {
+      "004":38,"008":3,"012":44,"024":32,"036":25,"040":9,"050":170,
+      "056":11,"076":215,"100":7,"124":38,"152":19,"156":1400,"170":51,
+      "191":4,"192":11,"203":11,"208":6,"276":83,"288":33,"300":11,
+      "320":17,"356":1400,"360":274,"364":85,"368":40,"372":5,
+      "376":9,"380":60,"392":126,"400":10,"404":55,"408":26,"410":52,
+      "422":7,"440":3,"458":33,"484":130,"504":37,"528":17,"566":220,
+      "578":5,"586":225,"604":33,"616":38,"620":10,"630":3,"634":3,
+      "642":19,"643":144,"702":6,"710":60,"724":47,"752":10,"756":9,
+      "764":70,"788":12,"792":84,"800":46,"804":44,"826":67,"840":335,
+      "858":3,"860":36,"862":29,"704":98,"716":16,"032":46,"218":18,
+      "266":2,"072":2
+    }
+  },
+  area: {
+    label: "Land Area (1000 km²)",
+    scheme: d3.interpolateGreens,
+    data: {
+      "004":652,"008":29,"012":2382,"024":1247,"036":7692,"040":84,
+      "050":148,"056":31,"076":8516,"100":111,"124":9985,"152":756,
+      "156":9597,"170":1142,"191":57,"192":110,"203":79,"208":43,
+      "276":357,"288":239,"300":132,"320":109,"356":3287,"360":1905,
+      "364":1648,"368":438,"372":70,"376":21,"380":301,"392":378,
+      "400":89,"404":582,"408":120,"410":99,"422":10,"440":65,
+      "458":330,"484":1964,"504":447,"528":41,"566":924,"578":324,
+      "586":796,"604":1285,"616":313,"620":92,"630":9,"634":12,
+      "642":238,"643":17098,"702":1,"710":1219,"724":506,"752":450,
+      "756":41,"764":513,"788":164,"792":784,"800":241,"804":604,
+      "826":243,"840":9834,"858":176,"860":449,"862":916,"704":331,
+      "716":391,"032":2780,"218":284,"266":268,"072":581
+    }
+  }
+};
+
+const COUNTRIES = {
+  "004":"Afghanistan","008":"Albania","012":"Algeria","024":"Angola",
+  "036":"Australia","040":"Austria","050":"Bangladesh","056":"Belgium",
+  "076":"Brazil","100":"Bulgaria","124":"Canada","152":"Chile",
+  "156":"China","170":"Colombia","191":"Croatia","192":"Cuba",
+  "203":"Czechia","208":"Denmark","276":"Germany","288":"Ghana",
+  "300":"Greece","320":"Guatemala","356":"India","360":"Indonesia",
+  "364":"Iran","368":"Iraq","372":"Ireland","376":"Israel",
+  "380":"Italy","392":"Japan","400":"Jordan","404":"Kenya",
+  "408":"North Korea","410":"South Korea","422":"Lebanon","440":"Lithuania",
+  "458":"Malaysia","484":"Mexico","504":"Morocco","528":"Netherlands",
+  "566":"Nigeria","578":"Norway","586":"Pakistan","604":"Peru",
+  "616":"Poland","620":"Portugal","630":"Puerto Rico","634":"Qatar",
+  "642":"Romania","643":"Russia","702":"Singapore","710":"South Africa",
+  "724":"Spain","752":"Sweden","756":"Switzerland","764":"Thailand",
+  "788":"Tunisia","792":"Turkey","800":"Uganda","804":"Ukraine",
+  "826":"United Kingdom","840":"United States","858":"Uruguay",
+  "860":"Uzbekistan","862":"Venezuela","704":"Vietnam","716":"Zimbabwe",
+  "032":"Argentina","218":"Ecuador","266":"Gabon","072":"Botswana"
+};
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 880, height = 480;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const zoomG = svg.append("g");
+
+const zoom = d3.zoom().scaleExtent([0.5, 8]).on("zoom", e => zoomG.attr("transform", e.transform));
+svg.call(zoom);
+d3.select("#btn-reset").on("click", () => svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity));
+
+// ── Projections ───────────────────────────────────────────────────────────
+const projections = {
+  naturalEarth1: () => d3.geoNaturalEarth1().scale(140).translate([width/2, height/2]),
+  mercator:      () => d3.geoMercator().scale(110).translate([width/2, height/1.5]),
+  orthographic:  () => d3.geoOrthographic().scale(200).translate([width/2, height/2]).rotate([-20, -30]),
+  equalEarth:    () => d3.geoEqualEarth().scale(150).translate([width/2, height/2]),
+};
+
+let projKey = "naturalEarth1";
+let metricKey = "gdp";
+
+const tooltip = d3.select("#tooltip");
+
+// ── GeoJSON ───────────────────────────────────────────────────────────────
+// Load world GeoJSON from a public source
+const GEOJSON_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+
+let topoData = null;
+let topojson = null;
+
+async function loadMap() {
+  try {
+    // Load topojson world atlas
+    const [topoMod, worldData] = await Promise.all([
+      import("https://cdn.jsdelivr.net/npm/topojson-client@3/+esm"),
+      fetch(GEOJSON_URL).then(r => r.json())
+    ]);
+    topojson = topoMod;
+    topoData = worldData;
+    render();
+  } catch(e) {
+    svg.append("text")
+      .attr("x", width/2).attr("y", height/2)
+      .attr("text-anchor","middle")
+      .style("fill","#e88").style("font-size","14px")
+      .text("Could not load map data — check network connection.");
+  }
+}
+
+function render() {
+  if (!topoData) return;
+
+  const proj = projections[projKey]();
+  const path = d3.geoPath().projection(proj);
+  const m = metrics[metricKey];
+  const vals = Object.values(m.data);
+  const colorScale = d3.scaleSequential(m.scheme)
+    .domain([d3.min(vals), d3.max(vals)]);
+
+  zoomG.selectAll("*").remove();
+
+  const countries = topojson.feature(topoData, topoData.objects.countries);
+
+  // Sphere
+  zoomG.append("path")
+    .datum({type:"Sphere"})
+    .attr("class","sphere")
+    .attr("d", path);
+
+  // Graticule
+  zoomG.append("path")
+    .datum(d3.geoGraticule()())
+    .attr("class","graticule")
+    .attr("d", path);
+
+  // Countries
+  zoomG.selectAll(".country")
+    .data(countries.features)
+    .join("path")
+      .attr("class","country")
+      .attr("d", path)
+      .attr("fill", d => {
+        const val = m.data[d.id];
+        return val != null ? colorScale(val) : "#1a3050";
+      })
+      .on("mouseover", (event, d) => {
+        const name = COUNTRIES[d.id] || `Country ${d.id}`;
+        const val  = m.data[d.id];
+        tooltip.html(
+          `<strong>${name}</strong><br>${m.label}:<br>` +
+          `<strong>${val != null ? d3.format(",")(val) : "N/A"}</strong>`
+        ).style("opacity",1);
+      })
+      .on("mousemove", event => {
+        tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+      })
+      .on("mouseout",() => tooltip.style("opacity",0));
+
+  drawLegend(colorScale, m.label);
+}
+
+function drawLegend(colorScale, label) {
+  const lw = 220, lh = 12;
+  const lx = 20, ly = height - 45;
+
+  const lg = svg.selectAll(".legend-g").data([null]).join("g")
+    .attr("class","legend-g")
+    .attr("transform",`translate(${lx},${ly})`);
+
+  lg.selectAll("*").remove();
+
+  // Gradient
+  const defs = svg.select("defs").size() ? svg.select("defs") : svg.append("defs");
+  const gradId = "cmap-grad";
+  defs.selectAll(`#${gradId}`).remove();
+  const grad = defs.append("linearGradient").attr("id",gradId);
+  d3.range(0,1.01,0.05).forEach(t => {
+    grad.append("stop").attr("offset",`${t*100}%`).attr("stop-color", colorScale(
+      colorScale.domain()[0] + t*(colorScale.domain()[1]-colorScale.domain()[0])
+    ));
+  });
+
+  lg.append("rect")
+    .attr("width",lw).attr("height",lh).attr("rx",3)
+    .attr("fill",`url(#${gradId})`);
+
+  const dom = colorScale.domain();
+  const fmtLeg = d3.format(dom[1] > 1000 ? ",.0f" : ".1f");
+  [0, 0.5, 1].forEach(t => {
+    lg.append("text").attr("class","legend-label")
+      .attr("x", t * lw).attr("y", lh + 14)
+      .attr("text-anchor", t === 0 ? "start" : t === 1 ? "end" : "middle")
+      .text(fmtLeg(dom[0] + t*(dom[1]-dom[0])));
+  });
+  lg.append("text").attr("class","legend-label")
+    .attr("x", 0).attr("y", -4)
+    .style("font-size","10px").style("fill","#aaa")
+    .text(label);
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────
+d3.select("#sel-proj").on("change", function() { projKey = this.value; render(); });
+d3.select("#sel-metric").on("change", function() { metricKey = this.value; render(); });
+
+loadMap();
+</script>
+</body>
+</html>

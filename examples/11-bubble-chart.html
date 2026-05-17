@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Bubble / Circle Pack — snow-d3 example 11</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
+    circle.node { cursor: pointer; transition: opacity 0.2s; }
+    circle.node:hover { opacity: 0.8; }
+    circle.node.depth-0 { fill: transparent; stroke: #ccc; stroke-width: 1; cursor: default; }
+    circle.node.depth-1 { stroke-width: 2; }
+    circle.node.depth-2 { stroke-width: 1; }
+    text.node-label { pointer-events: none; dominant-baseline: middle; text-anchor: middle; }
+    .breadcrumb { font-size: 13px; color: #555; margin-bottom: 10px; user-select: none; min-height: 18px; }
+    .breadcrumb span { cursor: pointer; color: #3b82f6; }
+    .breadcrumb span:last-child { color: #333; cursor: default; font-weight: 600; }
+    .breadcrumb span:not(:last-child):hover { text-decoration: underline; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Circle Packing (Bubble Chart)</h1>
+<p class="desc">Click a bubble to zoom in, click the background or breadcrumb to zoom out.<br>Uses <code>d3.pack()</code>, <code>d3.hierarchy()</code>, animated zoom transitions.</p>
+<div class="breadcrumb" id="breadcrumb"></div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const data = {
+  name: "Languages", value: 0,
+  children: [
+    { name: "Web", children: [
+      { name: "JavaScript", value: 380 }, { name: "TypeScript", value: 280 },
+      { name: "HTML/CSS", value: 220 }, { name: "WebAssembly", value: 80 },
+    ]},
+    { name: "Systems", children: [
+      { name: "C", value: 200 }, { name: "C++", value: 260 },
+      { name: "Rust", value: 190 }, { name: "Go", value: 240 },
+      { name: "Zig", value: 60 },
+    ]},
+    { name: "Scripting", children: [
+      { name: "Python", value: 420 }, { name: "Ruby", value: 120 },
+      { name: "Perl", value: 60 }, { name: "Lua", value: 90 },
+      { name: "PHP", value: 160 },
+    ]},
+    { name: "JVM", children: [
+      { name: "Java", value: 310 }, { name: "Kotlin", value: 210 },
+      { name: "Scala", value: 130 }, { name: "Groovy", value: 70 },
+      { name: "Clojure", value: 50 },
+    ]},
+    { name: "Functional", children: [
+      { name: "Haskell", value: 90 }, { name: "Elm", value: 60 },
+      { name: "F#", value: 80 }, { name: "OCaml", value: 70 },
+      { name: "Erlang", value: 50 },
+    ]},
+    { name: "Data / ML", children: [
+      { name: "R", value: 180 }, { name: "Julia", value: 120 },
+      { name: "MATLAB", value: 100 }, { name: "SAS", value: 60 },
+    ]},
+  ]
+};
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 760, height = 760;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const color = d3.scaleOrdinal()
+  .domain(data.children.map(d => d.name))
+  .range(d3.schemeTableau10);
+
+function nodeColor(d) {
+  if (d.depth === 0) return "transparent";
+  let n = d;
+  while (n.depth > 1) n = n.parent;
+  const base = d3.color(color(n.data.name));
+  return d.depth === 1
+    ? base.copy({ opacity: 0.2 })
+    : base.copy({ opacity: 0.65 });
+}
+
+// ── Hierarchy + pack ──────────────────────────────────────────────────────
+const root = d3.pack()
+  .size([width, height])
+  .padding(5)(
+    d3.hierarchy(data)
+      .sum(d => d.value)
+      .sort((a, b) => b.value - a.value)
+  );
+
+// ── State ─────────────────────────────────────────────────────────────────
+let focus = root;
+let view  = [root.x, root.y, root.r * 2 + 8];
+
+// ── Nodes ─────────────────────────────────────────────────────────────────
+const tooltip = d3.select("#tooltip");
+
+const circleSel = svg.append("g")
+  .selectAll("circle.node")
+  .data(root.descendants())
+  .join("circle")
+    .attr("class", d => `node depth-${d.depth}`)
+    .attr("fill", nodeColor)
+    .attr("stroke", d => {
+      if (d.depth === 0) return "#ccc";
+      let n = d; while (n.depth > 1) n = n.parent;
+      return d3.color(color(n.data.name)).darker(0.5);
+    })
+    .on("mouseover", (event, d) => {
+      if (!d.children) {
+        tooltip.html(
+          `<strong>${d.data.name}</strong><br>` +
+          `Category: ${d.parent?.data.name}<br>` +
+          `Value: ${d.data.value}`
+        ).style("opacity",1);
+      }
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout",() => tooltip.style("opacity",0))
+    .on("click", (event, d) => {
+      event.stopPropagation();
+      if (d === focus && d.parent) { zoom(d.parent); return; }
+      if (d.children) zoom(d);
+    });
+
+// ── Labels ────────────────────────────────────────────────────────────────
+const labelSel = svg.append("g")
+  .style("pointer-events","none")
+  .selectAll("text.node-label")
+  .data(root.descendants().filter(d => d.depth > 0))
+  .join("text")
+    .attr("class","node-label")
+    .style("font-size", d => d.children ? "13px" : "11px")
+    .style("font-weight", d => d.children ? "600" : "400")
+    .style("fill", d => {
+      if (!d.children) return "#222";
+      let n = d; while (n.depth > 1) n = n.parent;
+      return d3.color(color(n.data.name)).darker(2);
+    })
+    .text(d => d.data.name)
+    .style("display", d => d.parent === root ? "inline" : "none");
+
+// ── Position helper ───────────────────────────────────────────────────────
+function zoomTo(v) {
+  const k = width / v[2];
+  view = v;
+  labelSel.attr("transform", d =>
+    `translate(${(d.x - v[0]) * k + width/2},${(d.y - v[1]) * k + height/2})`
+  );
+  circleSel.attr("transform", d =>
+    `translate(${(d.x - v[0]) * k + width/2},${(d.y - v[1]) * k + height/2})`
+  ).attr("r", d => d.r * k);
+}
+
+// ── Zoom ──────────────────────────────────────────────────────────────────
+function zoom(d) {
+  focus = d;
+  const target = [d.x, d.y, d.r * 2 + 8];
+  breadcrumb(d);
+
+  labelSel.style("display", n => n.parent === d ? "inline" : "none");
+
+  const transition = svg.transition().duration(600).ease(d3.easeCubicInOut)
+    .tween("zoom", () => {
+      const i = d3.interpolateZoom(view, target);
+      return t => zoomTo(i(t));
+    });
+}
+
+// ── Breadcrumb ────────────────────────────────────────────────────────────
+function breadcrumb(node) {
+  const ancestors = node.ancestors().reverse();
+  const crumb = d3.select("#breadcrumb");
+  crumb.selectAll("*").remove();
+  ancestors.forEach((d, i) => {
+    const sp = crumb.append("span").text(d.data.name);
+    if (i < ancestors.length - 1) {
+      sp.on("click", () => zoom(d));
+      crumb.append("span").text(" / ").style("color","#bbb").style("cursor","default");
+    }
+  });
+}
+
+svg.on("click", () => { if (focus !== root) zoom(focus.parent || root); });
+
+zoomTo([root.x, root.y, root.r * 2]);
+breadcrumb(root);
+</script>
+</body>
+</html>
