@@ -12,7 +12,7 @@
     #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); cursor: crosshair; }
     .cell { transition: fill-opacity 0.15s; }
     .cell:hover { fill-opacity: 0.85; }
-    .mesh-line { fill: none; stroke: white; stroke-width: 0.8; pointer-events: none; }
+    .mesh-line { fill: none; pointer-events: none; }
     .site-dot { cursor: pointer; }
     .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
     button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
@@ -83,16 +83,16 @@ function render() {
   const voronoi  = delaunay.voronoi([0, 0, width, height]);
 
   // Cells
-  if (mode === "cells" || mode === "mesh") {
+  if (mode === "cells") {
     cellG.selectAll(".cell")
       .data(sites)
       .join("path")
         .attr("class","cell")
         .attr("d", (d, i) => voronoi.renderCell(i))
-        .attr("fill", d => mode === "cells" ? color(d.cat) : "none")
+        .attr("fill", d => color(d.cat))
         .attr("fill-opacity", 0.55)
         .attr("stroke", "white")
-        .attr("stroke-width", mode === "cells" ? 0 : 1)
+        .attr("stroke-width", 1)
         .on("mouseover", (event, d) => {
           tooltip.html(
             `Site #${d.id}<br>` +
