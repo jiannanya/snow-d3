@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Parallel Coordinates — snow-d3 example 21</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .axis-label { font-size: 12px; font-weight: 600; fill: #333; text-anchor: middle; }
+    .polyline { fill: none; stroke-width: 1.5; transition: stroke-opacity 0.15s; cursor: pointer; }
+    .polyline:hover { stroke-opacity: 1 !important; stroke-width: 2.5 !important; }
+    .brush .selection { fill: #3b82f6; fill-opacity: 0.2; stroke: #3b82f6; }
+    .brush .overlay { cursor: crosshair; }
+    .legend { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-top: 10px; font-size: 12px; color: #555; }
+    .legend-item { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .legend-swatch { width: 20px; height: 3px; border-radius: 2px; }
+    .legend-item.muted { opacity: 0.35; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Parallel Coordinates</h1>
+<p class="desc">Each line is one vehicle. Brush an axis to filter. Click legend to highlight a category.<br>Uses <code>scaleLinear</code>, <code>d3.line()</code>, <code>d3.brushY()</code>, and <code>schemeTableau10</code>.</p>
+<div class="controls">
+  <button id="btn-reset">Reset Filters</button>
+  <button id="btn-resample">Resample</button>
+</div>
+<div id="chart"></div>
+<div class="legend" id="legend"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Synthetic car dataset ────────────────────────────────────────────────
+const CATEGORIES = ["Sedan","SUV","Truck","EV","Sports"];
+const color = d3.scaleOrdinal(d3.schemeTableau10).domain(CATEGORIES);
+
+function randRange(lo, hi) { return lo + Math.random() * (hi - lo); }
+
+function genCar(cat) {
+  const base = { Sedan:0, SUV:0.3, Truck:0.5, EV:0.1, Sports:-0.2 }[cat];
+  return {
+    category:    cat,
+    mpg:         Math.round(randRange(20, 55) - base * 15),
+    hp:          Math.round(randRange(100, 400) + base * 80),
+    weight:      Math.round(randRange(2800, 5200) + base * 400),
+    acceleration:parseFloat((randRange(7, 16) - base * 2).toFixed(1)),
+    price:       Math.round(randRange(22000, 90000) + base * 12000),
+  };
+}
+
+function makeData(n = 200) {
+  return d3.range(n).map(() => genCar(CATEGORIES[Math.floor(Math.random()*CATEGORIES.length)]));
+}
+
+// ── Dimensions ────────────────────────────────────────────────────────────
+const width = 820, height = 440;
+const margin = { top: 50, right: 30, bottom: 30, left: 30 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const DIMS = ["mpg","hp","weight","acceleration","price"];
+const DIM_LABELS = { mpg:"MPG", hp:"HP", weight:"Weight (lb)", acceleration:"0-60 mph (s)", price:"Price ($)" };
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+// ── State ─────────────────────────────────────────────────────────────────
+let data = makeData();
+let brushFilters = {}; // dim → [lo, hi] in data space
+let focusCat = null;
+const tooltip = d3.select("#tooltip");
+
+// ── Scales ────────────────────────────────────────────────────────────────
+const xScale = d3.scalePoint().domain(DIMS).range([0, innerW]).padding(0.2);
+const yScales = {};
+DIMS.forEach(d => {
+  yScales[d] = d3.scaleLinear()
+    .domain(d3.extent(data, row => row[d])).nice()
+    .range([innerH, 0]);
+});
+
+const lineGen = datum => d3.line()(
+  DIMS.map(dim => [xScale(dim), yScales[dim](datum[dim])])
+);
+
+function isActive(d) {
+  for (const [dim, [lo, hi]] of Object.entries(brushFilters)) {
+    if (d[dim] < lo || d[dim] > hi) return false;
+  }
+  return true;
+}
+
+// ── Draw ──────────────────────────────────────────────────────────────────
+function render() {
+  g.selectAll("*").remove();
+
+  // Lines
+  const lines = g.append("g").attr("class","lines");
+  lines.selectAll(".polyline")
+    .data(data)
+    .join("path")
+      .attr("class","polyline")
+      .attr("d", lineGen)
+      .attr("stroke", d => color(d.category))
+      .attr("stroke-opacity", d => {
+        const active = isActive(d);
+        if (!active) return 0.05;
+        if (focusCat && d.category !== focusCat) return 0.1;
+        return 0.5;
+      })
+      .on("mouseover", (event, d) => {
+        tooltip.html(
+          `<strong style="color:${color(d.category)}">${d.category}</strong><br>` +
+          `MPG: ${d.mpg} | HP: ${d.hp}<br>` +
+          `Weight: ${d3.format(",")(d.weight)} lb<br>` +
+          `0-60: ${d.acceleration}s | Price: $${d3.format(",")(d.price)}`
+        ).style("opacity",1);
+      })
+      .on("mousemove", event => {
+        tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-40)+"px");
+      })
+      .on("mouseout", () => tooltip.style("opacity",0));
+
+  // Axes + brushes
+  DIMS.forEach(dim => {
+    const axisG = g.append("g").attr("transform",`translate(${xScale(dim)},0)`);
+    axisG.append("g").attr("class","axis")
+      .call(d3.axisLeft(yScales[dim]).ticks(6).tickSize(3));
+    axisG.append("text").attr("class","axis-label")
+      .attr("y",-16).text(DIM_LABELS[dim]);
+
+    // Brush
+    const brush = d3.brushY()
+      .extent([[-14, 0],[14, innerH]])
+      .on("brush end", ({ selection }) => {
+        if (!selection) {
+          delete brushFilters[dim];
+        } else {
+          const [y0, y1] = selection;
+          brushFilters[dim] = [yScales[dim].invert(y1), yScales[dim].invert(y0)];
+        }
+        lines.selectAll(".polyline")
+          .attr("stroke-opacity", d => {
+            const active = isActive(d);
+            if (!active) return 0.05;
+            if (focusCat && d.category !== focusCat) return 0.1;
+            return 0.5;
+          });
+      });
+
+    axisG.append("g").attr("class","brush").call(brush);
+  });
+}
+
+// ── Legend ────────────────────────────────────────────────────────────────
+const legendEl = d3.select("#legend");
+CATEGORIES.forEach(cat => {
+  legendEl.append("div").attr("class","legend-item").attr("id",`leg-${cat}`)
+    .call(el => {
+      el.append("div").attr("class","legend-swatch").style("background",color(cat));
+      el.append("span").text(cat);
+    })
+    .on("click", () => {
+      focusCat = focusCat === cat ? null : cat;
+      legendEl.selectAll(".legend-item").classed("muted", d => false);
+      if (focusCat) {
+        legendEl.selectAll(".legend-item").each(function() {
+          const id = d3.select(this).attr("id");
+          if (id !== `leg-${focusCat}`) d3.select(this).classed("muted",true);
+        });
+      }
+      render();
+    });
+});
+
+d3.select("#btn-reset").on("click", () => { brushFilters = {}; render(); });
+d3.select("#btn-resample").on("click", () => { data = makeData(); render(); });
+
+render();
+</script>
+</body>
+</html>

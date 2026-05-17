@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Lollipop Chart — snow-d3 example 28</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .lollipop-stem { stroke-width: 2; }
+    .lollipop-dot  { cursor: pointer; transition: r 0.1s; }
+    .lollipop-dot:hover { r: 10; }
+    .dot-label { font-size: 11px; dominant-baseline: middle; }
+    .cat-label { font-size: 11px; dominant-baseline: middle; text-anchor: end; fill: #555; }
+    .zero-line { stroke: #ccc; stroke-width: 1; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+    .legend { display: flex; gap: 16px; justify-content: center; margin-top: 8px; font-size: 12px; color: #555; }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Lollipop / Dot Plot Chart</h1>
+<p class="desc">Sorted horizontal lollipops with animated transitions. Toggle comparison mode to see two series. Uses <code>scaleBand</code>, <code>scaleLinear</code>, animated <code>attrTween</code>.</p>
+<div class="controls">
+  <button id="btn-single" class="active">Single Series</button>
+  <button id="btn-compare">Compare</button>
+  <button id="btn-sort">Sort: Desc</button>
+  <button id="btn-resample">Resample</button>
+</div>
+<div id="chart"></div>
+<div class="legend" id="legend"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const ITEMS = [
+  "Python","JavaScript","TypeScript","Rust","Go","Kotlin",
+  "Swift","Java","C++","C#","Ruby","PHP","Dart","Scala","Elixir"
+];
+
+function makeData() {
+  return ITEMS.map(name => ({
+    name,
+    a: Math.round(Math.random() * 85 + 15),
+    b: Math.round(Math.random() * 85 + 15),
+  }));
+}
+
+// ── Config ────────────────────────────────────────────────────────────────
+const COLOR_A = "#3b82f6";
+const COLOR_B = "#f43f5e";
+
+let data = makeData();
+let mode = "single"; // single | compare
+let sortDir = "desc";
+const tooltip = d3.select("#tooltip");
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 700, height = 520;
+const margin = { top: 20, right: 80, bottom: 30, left: 100 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+// Axes groups (drawn once)
+const xAxisG = g.append("g").attr("class","axis x-axis").attr("transform",`translate(0,${innerH})`);
+const yAxisG = g.append("g").attr("class","axis y-axis");
+const bodyG  = g.append("g");
+
+svg.append("text")
+  .attr("x", margin.left + innerW/2).attr("y", height - 4)
+  .attr("text-anchor","middle").style("font-size","11px").style("fill","#999")
+  .text("Popularity Score");
+
+function render(animate = true) {
+  const dur = animate ? 500 : 0;
+  let sorted = [...data];
+  if (sortDir === "desc") sorted.sort((a,b) => b.a - a.a);
+  else                    sorted.sort((a,b) => a.a - b.a);
+
+  const xScale = d3.scaleLinear().domain([0, 100]).range([0, innerW]);
+  const yScale = d3.scaleBand()
+    .domain(sorted.map(d => d.name))
+    .range([0, innerH]).padding(0.38);
+
+  xAxisG.transition().duration(dur)
+    .call(d3.axisBottom(xScale).ticks(5).tickFormat(d => `${d}`));
+  yAxisG.transition().duration(dur).call(d3.axisLeft(yScale).tickSize(0));
+  yAxisG.select(".domain").remove();
+  yAxisG.selectAll(".tick line").remove();
+
+  // Zero line
+  bodyG.selectAll(".zero-line").remove();
+  bodyG.append("line").attr("class","zero-line")
+    .attr("x1",0).attr("x2",0).attr("y1",0).attr("y2",innerH);
+
+  const bw = yScale.bandwidth();
+
+  // A series
+  const aG = bodyG.selectAll(".lollipop-a")
+    .data(sorted, d => d.name)
+    .join("g").attr("class","lollipop-a");
+
+  aG.transition().duration(dur)
+    .attr("transform", d => `translate(0,${yScale(d.name) + (mode==="compare" ? -bw*0.22 : 0)})`);
+
+  aG.selectAll(".lollipop-stem")
+    .data(d => [d])
+    .join("line").attr("class","lollipop-stem")
+    .attr("stroke", COLOR_A)
+    .attr("y1", bw/2).attr("y2", bw/2)
+    .transition().duration(dur)
+      .attr("x1",0).attr("x2", d => xScale(d.a));
+
+  aG.selectAll(".lollipop-dot")
+    .data(d => [d])
+    .join("circle").attr("class","lollipop-dot")
+    .attr("cy", bw/2).attr("r", 7)
+    .attr("fill", COLOR_A).attr("stroke","white").attr("stroke-width",1.5)
+    .on("mouseover",(event,d)=>{
+      tooltip.html(`<strong>${d.name}</strong><br>Series A: <strong>${d.a}</strong>${mode==="compare" ? `<br>Series B: <strong>${d.b}</strong>` : ""}`).style("opacity",1);
+    })
+    .on("mousemove",event=>tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px"))
+    .on("mouseout",()=>tooltip.style("opacity",0))
+    .transition().duration(dur)
+      .attr("cx", d => xScale(d.a));
+
+  aG.selectAll(".dot-label")
+    .data(d => [d])
+    .join("text").attr("class","dot-label")
+    .attr("y", bw/2 + 1).attr("fill", COLOR_A)
+    .transition().duration(dur)
+      .attr("x", d => xScale(d.a) + 10)
+      .text(d => d.a);
+
+  // B series (compare mode)
+  if (mode === "compare") {
+    const bG = bodyG.selectAll(".lollipop-b")
+      .data(sorted, d => d.name)
+      .join("g").attr("class","lollipop-b");
+
+    bG.transition().duration(dur)
+      .attr("transform", d => `translate(0,${yScale(d.name) + bw*0.22})`);
+
+    bG.selectAll(".lollipop-stem")
+      .data(d => [d])
+      .join("line").attr("class","lollipop-stem")
+      .attr("stroke", COLOR_B)
+      .attr("y1", bw/2).attr("y2", bw/2)
+      .transition().duration(dur).attr("x1",0).attr("x2", d => xScale(d.b));
+
+    bG.selectAll(".lollipop-dot")
+      .data(d => [d])
+      .join("circle").attr("class","lollipop-dot")
+      .attr("cy", bw/2).attr("r", 7)
+      .attr("fill", COLOR_B).attr("stroke","white").attr("stroke-width",1.5)
+      .transition().duration(dur).attr("cx", d => xScale(d.b));
+
+    bG.selectAll(".dot-label")
+      .data(d => [d])
+      .join("text").attr("class","dot-label")
+      .attr("y", bw/2 + 1).attr("fill", COLOR_B)
+      .transition().duration(dur).attr("x", d => xScale(d.b) + 10).text(d => d.b);
+  } else {
+    bodyG.selectAll(".lollipop-b").remove();
+  }
+}
+
+// Legend
+function updateLegend() {
+  const leg = d3.select("#legend");
+  leg.selectAll("*").remove();
+  if (mode === "compare") {
+    [["Series A", COLOR_A],["Series B", COLOR_B]].forEach(([label, c]) => {
+      const el = leg.append("div").attr("class","legend-item");
+      el.append("div").attr("class","legend-dot").style("background",c);
+      el.append("span").text(label);
+    });
+  }
+}
+
+d3.select("#btn-single").on("click",function(){
+  mode="single";
+  d3.selectAll("button").classed("active",false); d3.select(this).classed("active",true);
+  updateLegend(); render();
+});
+d3.select("#btn-compare").on("click",function(){
+  mode="compare";
+  d3.selectAll("button").classed("active",false); d3.select(this).classed("active",true);
+  updateLegend(); render();
+});
+d3.select("#btn-sort").on("click",function(){
+  sortDir = sortDir==="desc" ? "asc" : "desc";
+  d3.select(this).text(`Sort: ${sortDir==="desc"?"Desc":"Asc"}`);
+  render();
+});
+d3.select("#btn-resample").on("click",()=>{ data=makeData(); render(); });
+
+render(false);
+</script>
+</body>
+</html>

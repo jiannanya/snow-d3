@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Correlation Matrix — snow-d3 example 29</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .cell { cursor: pointer; transition: opacity 0.15s; rx: 3; }
+    .cell:hover { opacity: 0.82; stroke: #333; stroke-width: 1.5; }
+    .cell-label { font-size: 10px; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+    .axis-label { font-size: 11px; fill: #444; }
+    .legend-label { font-size: 10px; fill: #888; text-anchor: middle; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Correlation Matrix</h1>
+<p class="desc">Pairwise Pearson correlations between financial metrics. Hover a cell for values. Uses <code>scaleSequential(d3.interpolateRdBu)</code>, <code>scaleBand</code>, and computed correlations.</p>
+<div class="controls">
+  <button id="btn-values" class="active">Show Values</button>
+  <button id="btn-hide-diag">Hide Diagonal</button>
+  <button id="btn-resample">Resample</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Metrics ────────────────────────────────────────────────────────────────
+const METRICS = ["Revenue","EBITDA","Net Income","FCF","ROE","Debt/Equity","P/E Ratio","Beta","Volatility","Dividend Yield"];
+const N = METRICS.length;
+const N_OBS = 200;
+
+// ── Generate correlated data ──────────────────────────────────────────────
+function normal() {
+  const u = Math.random(), v = Math.random();
+  return Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+}
+
+function genSamples() {
+  // Use a latent factor model for realistic correlations
+  const factors = d3.range(3).map(() => d3.range(N_OBS).map(() => normal()));
+  const loadings = METRICS.map(() => [
+    (Math.random()-0.3)*0.8,
+    (Math.random()-0.4)*0.6,
+    (Math.random()-0.5)*0.4,
+  ]);
+  return METRICS.map((_, mi) => d3.range(N_OBS).map(i =>
+    loadings[mi][0]*factors[0][i] + loadings[mi][1]*factors[1][i] +
+    loadings[mi][2]*factors[2][i] + normal()*0.5
+  ));
+}
+
+function pearson(a, b) {
+  const n = a.length;
+  const ma = d3.mean(a), mb = d3.mean(b);
+  const num = d3.sum(d3.range(n), i => (a[i]-ma)*(b[i]-mb));
+  const da  = Math.sqrt(d3.sum(a, v => (v-ma)**2));
+  const db  = Math.sqrt(d3.sum(b, v => (v-mb)**2));
+  return da*db === 0 ? 0 : num / (da*db);
+}
+
+function computeMatrix(samples) {
+  return d3.range(N).map(i =>
+    d3.range(N).map(j => pearson(samples[i], samples[j]))
+  );
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const size = 520;
+const margin = { top: 80, right: 30, bottom: 20, left: 90 };
+const innerW = size - margin.left - margin.right;
+const innerH = size - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", size).attr("height", size)
+  .attr("viewBox",`0 0 ${size} ${size}`)
+  .style("max-width","100%").style("height","auto");
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+const cell = innerW / N;
+const colorScale = d3.scaleSequential(d3.interpolateRdBu).domain([-1, 1]);
+const tooltip = d3.select("#tooltip");
+
+let showValues = true, hideDiag = false;
+let samples = genSamples();
+let matrix  = computeMatrix(samples);
+
+// ── Axis labels ─────────────────────────────────────────────────────────────
+METRICS.forEach((m, i) => {
+  g.append("text").attr("class","axis-label")
+    .attr("x", i*cell + cell/2).attr("y", -8)
+    .attr("text-anchor","middle")
+    .style("font-size","10px")
+    .text(m);
+  g.append("text").attr("class","axis-label")
+    .attr("x",-8).attr("y", i*cell + cell/2)
+    .attr("text-anchor","end").attr("dominant-baseline","middle")
+    .style("font-size","10px")
+    .text(m);
+});
+
+// ── Color legend ─────────────────────────────────────────────────────────────
+const legW = 140, legH = 10;
+const legX = innerW - legW, legY = -50;
+const legSteps = 20;
+d3.range(legSteps).forEach(i => {
+  svg.append("rect")
+    .attr("x", margin.left + legX + (i/legSteps)*legW)
+    .attr("y", margin.top + legY)
+    .attr("width", legW/legSteps + 0.5).attr("height", legH)
+    .attr("fill", colorScale(-1 + (i/legSteps)*2));
+});
+svg.append("text").attr("class","legend-label")
+  .attr("x", margin.left + legX).attr("y", margin.top + legY + legH + 12)
+  .text("-1");
+svg.append("text").attr("class","legend-label")
+  .attr("x", margin.left + legX + legW/2).attr("y", margin.top + legY + legH + 12)
+  .text("0");
+svg.append("text").attr("class","legend-label")
+  .attr("x", margin.left + legX + legW).attr("y", margin.top + legY + legH + 12)
+  .text("+1");
+
+const cellsG = g.append("g");
+
+function render() {
+  cellsG.selectAll("*").remove();
+  matrix.forEach((row, i) => {
+    row.forEach((val, j) => {
+      if (hideDiag && i === j) return;
+
+      const x = j*cell, y = i*cell;
+
+      cellsG.append("rect").attr("class","cell")
+        .attr("x",x+1).attr("y",y+1)
+        .attr("width",cell-2).attr("height",cell-2)
+        .attr("rx",3)
+        .attr("fill", i===j ? "#f8f8f8" : colorScale(val))
+        .on("mouseover",(event)=>{
+          tooltip.html(
+            `<strong>${METRICS[i]}</strong> × <strong>${METRICS[j]}</strong><br>` +
+            `Correlation: <strong style="color:${colorScale(val)}">${val.toFixed(3)}</strong><br>` +
+            `${Math.abs(val) > 0.7 ? "Strong" : Math.abs(val) > 0.4 ? "Moderate" : "Weak"} ${val > 0 ? "positive" : val < 0 ? "negative" : "no"} correlation`
+          ).style("opacity",1);
+        })
+        .on("mousemove",event=>tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-50)+"px"))
+        .on("mouseout",()=>tooltip.style("opacity",0));
+
+      if (showValues && cell > 22) {
+        const lum = i===j ? 0 : (val < -0.4 || val > 0.4) ? 1 : 0;
+        cellsG.append("text").attr("class","cell-label")
+          .attr("x",x+cell/2).attr("y",y+cell/2)
+          .attr("fill",i===j?"#aaa":(lum?"white":"#333"))
+          .text(i===j ? "1" : val.toFixed(2));
+      }
+    });
+  });
+}
+
+d3.select("#btn-values").on("click",function(){
+  showValues=!showValues;
+  d3.select(this).classed("active",showValues);
+  render();
+});
+d3.select("#btn-hide-diag").on("click",function(){
+  hideDiag=!hideDiag;
+  d3.select(this).classed("active",hideDiag);
+  render();
+});
+d3.select("#btn-resample").on("click",()=>{ samples=genSamples(); matrix=computeMatrix(samples); render(); });
+
+render();
+</script>
+</body>
+</html>

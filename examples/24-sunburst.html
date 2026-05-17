@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Sunburst Chart — snow-d3 example 24</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .arc-path { cursor: pointer; transition: opacity 0.15s; }
+    .arc-path:hover { opacity: 0.82; }
+    .arc-label { font-size: 11px; fill: white; pointer-events: none; text-anchor: middle; dominant-baseline: middle; }
+    .center-hint { font-size: 12px; fill: #999; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+    .center-name { font-size: 14px; font-weight: 600; fill: #333; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+    .center-value { font-size: 12px; fill: #888; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+    .breadcrumb { font-size: 12px; fill: #555; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Sunburst Chart</h1>
+<p class="desc">Radial partition of hierarchical data. Click a segment to zoom in. Uses <code>d3.partition()</code>, <code>d3.hierarchy()</code>, <code>arcTween</code>, and <code>interpolateRgb</code>.</p>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const hierarchyData = {
+  name: "Tech Budget", value: 0,
+  children: [
+    { name: "Infrastructure", children: [
+      { name: "Cloud",     value: 420 },
+      { name: "On-Prem",   value: 280 },
+      { name: "Network",   value: 160 },
+      { name: "Security",  value: 200 },
+    ]},
+    { name: "Engineering", children: [
+      { name: "Backend",   value: 560 },
+      { name: "Frontend",  value: 390 },
+      { name: "Mobile",    value: 270 },
+      { name: "DevOps",    value: 310 },
+      { name: "QA",        value: 180 },
+    ]},
+    { name: "Data & AI", children: [
+      { name: "Analytics", value: 340 },
+      { name: "ML Ops",    value: 410 },
+      { name: "BI Tools",  value: 150 },
+    ]},
+    { name: "Product", children: [
+      { name: "Design",    value: 220 },
+      { name: "Research",  value: 130 },
+      { name: "PMO",       value: 180 },
+    ]},
+    { name: "Operations", children: [
+      { name: "Support",   value: 250 },
+      { name: "HR Tech",   value: 120 },
+      { name: "Finance",   value: 110 },
+    ]},
+  ]
+};
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 560, height = 560;
+const cx = width/2, cy = height/2;
+const maxR = Math.min(cx, cy) - 10;
+const innerR = 70;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${cx},${cy})`);
+
+// ── Hierarchy ─────────────────────────────────────────────────────────────
+const root = d3.hierarchy(hierarchyData)
+  .sum(d => d.value)
+  .sort((a,b) => b.value - a.value);
+
+const partition = d3.partition().size([2*Math.PI, 1]);
+partition(root);
+
+// ── Color ─────────────────────────────────────────────────────────────────
+const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
+function nodeColor(d) {
+  let anc = d;
+  while (anc.depth > 1) anc = anc.parent;
+  const base = d3.color(colorScale(anc.data.name));
+  if (d.depth === 1) return base.toString();
+  return d3.interpolateRgb(base, "#fff")(d.depth * 0.28).toString();
+}
+
+// ── Arc ────────────────────────────────────────────────────────────────────
+function arcFor(node, focus) {
+  const x = d3.scaleLinear().domain([focus.x0, focus.x1]).range([0, 2*Math.PI]);
+  const y = d3.scaleLinear().domain([focus.y0, 1]).range([innerR, maxR]);
+  return d3.arc()
+    .startAngle(d  => Math.max(0, Math.min(2*Math.PI, x(d.x0))))
+    .endAngle(d    => Math.max(0, Math.min(2*Math.PI, x(d.x1))))
+    .innerRadius(d => Math.max(innerR, y(d.y0)))
+    .outerRadius(d => Math.max(innerR, y(d.y1) - 1));
+}
+
+// ── Render ─────────────────────────────────────────────────────────────────
+const tooltip = d3.select("#tooltip");
+let focusNode = root;
+const dur = 650;
+
+// Arc paths
+const pathG = g.append("g");
+// Labels
+const labelG = g.append("g");
+// Center text
+const centerG = g.append("g");
+
+function render(focus) {
+  focusNode = focus;
+  const arc = arcFor(root, focus);
+
+  const nodes = root.descendants().filter(d => d.depth > 0);
+
+  // Paths
+  pathG.selectAll(".arc-path")
+    .data(nodes, d => d.data.name)
+    .join(
+      enter => enter.append("path").attr("class","arc-path")
+        .attr("fill", nodeColor)
+        .attr("d", arc)
+        .on("click", (event, d) => {
+          render(d === focusNode ? (d.parent || root) : d);
+        })
+        .on("mouseover", (event, d) => {
+          const pct = (d.value / root.value * 100).toFixed(1);
+          const path = [];
+          let cur = d;
+          while (cur.parent) { path.unshift(cur.data.name); cur = cur.parent; }
+          tooltip.html(
+            `<strong style="color:${nodeColor(d)}">${d.data.name}</strong><br>` +
+            `Value: ${d3.format(",")(d.value)}<br>` +
+            `Share: ${pct}%<br>` +
+            `Path: ${path.join(" › ")}`
+          ).style("opacity",1);
+        })
+        .on("mousemove", event => tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-50)+"px"))
+        .on("mouseout",  () => tooltip.style("opacity",0)),
+      update => update
+    )
+    .transition().duration(dur)
+      .attrTween("d", function(d) {
+        const start = this._s || d;
+        this._s = d;
+        const iArc = arcFor(root, start);
+        const eArc = arcFor(root, focus);
+        const i = d3.interpolateObject(
+          { x0:d.x0, x1:d.x1, y0:d.y0, y1:d.y1 },
+          { x0:d.x0, x1:d.x1, y0:d.y0, y1:d.y1 }
+        );
+        return t => eArc(d);
+      });
+
+  // Center text
+  centerG.selectAll("*").remove();
+  centerG.append("text").attr("class","center-name").attr("y",-12)
+    .text(focus.data.name === "Tech Budget" ? "Total" : focus.data.name);
+  centerG.append("text").attr("class","center-value").attr("y",12)
+    .text(d3.format(",")(focus.value));
+  centerG.append("text").attr("class","center-hint").attr("y",30)
+    .style("font-size","10px")
+    .text(focus === root ? "click segment" : "click to go back");
+}
+
+render(root);
+</script>
+</body>
+</html>

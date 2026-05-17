@@ -1,6 +1,6 @@
 ---
 name: snow-d3
-description: 'D3.js data visualization skill. Use when creating charts, graphs, maps, or any data-driven SVG/Canvas visualizations with D3.js. Covers bar charts, line charts, pie charts, scatter plots, area charts, histograms, force-directed graphs, tree layouts, treemaps, choropleth maps, transitions, zoom, brush, and all 30 D3 modules. Triggers: d3, d3.js, data visualization, chart, graph, svg visualization, interactive chart, force graph, geo map, treemap, sunburst, chord diagram, d3-selection, d3-scale, d3-shape, d3-force, d3-hierarchy, d3-geo.'
+description: 'D3.js data visualization skill. Use when creating charts, graphs, maps, or any data-driven SVG/Canvas visualizations with D3.js. Covers bar charts, line charts, pie charts, scatter plots, area charts, histograms, force-directed graphs, tree layouts, treemaps, choropleth maps, transitions, zoom, brush, and all 30 D3 modules. Also covers heatmaps, radial/polar charts, Sankey diagrams, box plots, violin plots, waterfall charts, Gantt timelines, parallel coordinates, radar/spider charts, bump/ranking charts, sunburst partitions, Voronoi diagrams, density contours, candlestick OHLC charts, lollipop/dot plots, correlation matrices, and ridgeline/joy plots. Triggers: d3, d3.js, data visualization, chart, graph, svg visualization, interactive chart, force graph, geo map, treemap, sunburst, chord diagram, sankey, heatmap, gantt, candlestick, radar, voronoi, ridgeline, waterfall, parallel coordinates, d3-selection, d3-scale, d3-shape, d3-force, d3-hierarchy, d3-geo.'
 argument-hint: 'Describe the chart type or visualization you want to build (e.g. "bar chart", "force graph", "choropleth map")'
 ---
 
@@ -45,6 +45,22 @@ D3 (Data-Driven Documents) v7 — the JavaScript library for bespoke data visual
 | [12-transitions.html](./examples/12-transitions.html) | Animated bar chart update | `selection.transition()`, `easeElastic`, data join |
 | [13-brush-zoom.html](./examples/13-brush-zoom.html) | Brush & zoom on time series | `d3.brush()`, `d3.zoom()`, context + focus chart |
 | [14-chord-diagram.html](./examples/14-chord-diagram.html) | Chord diagram | `d3.chord()`, `d3.ribbon()`, arc paths |
+| [15-heatmap.html](./examples/15-heatmap.html) | Calendar heatmap | `scaleSequential`, `d3-time`, `interpolateGreens`, GitHub-style grid |
+| [16-radial-bar.html](./examples/16-radial-bar.html) | Radial / polar bar | `scaleRadial`, `arc()`, coxcomb & nightingale modes |
+| [17-sankey.html](./examples/17-sankey.html) | Sankey / alluvial flow | `d3-sankey` (CDN), `sankeyLinkHorizontal()`, node/link tooltips |
+| [18-box-plot.html](./examples/18-box-plot.html) | Box plot + violin | `d3.bin()`, `d3.area()` KDE violin, quartile stats, jitter |
+| [19-waterfall.html](./examples/19-waterfall.html) | Waterfall / bridge | Running cumulative totals, positive/negative bars, connector lines |
+| [20-gantt.html](./examples/20-gantt.html) | Gantt timeline | `scaleTime`, `scaleBand`, progress bars, today marker |
+| [21-parallel-coordinates.html](./examples/21-parallel-coordinates.html) | Parallel coordinates | Per-axis `scaleLinear`, `brushY()` filter, polyline rendering |
+| [22-radar-chart.html](./examples/22-radar-chart.html) | Radar / spider chart | Radial projection, `curveLinearClosed`, multi-series overlay |
+| [23-bump-chart.html](./examples/23-bump-chart.html) | Bump / ranking chart | `scalePoint`, `curveBumpX`, rank badges, hover highlight |
+| [24-sunburst.html](./examples/24-sunburst.html) | Sunburst partition | `d3.partition()`, `d3.hierarchy()`, click-to-zoom arc tween |
+| [25-voronoi.html](./examples/25-voronoi.html) | Voronoi diagram | `d3.Delaunay.from()`, `.voronoi()`, click to add sites |
+| [26-contour.html](./examples/26-contour.html) | Density contour / KDE | `d3.contourDensity()`, `d3.geoPath()`, adjustable bandwidth |
+| [27-candlestick.html](./examples/27-candlestick.html) | Candlestick / OHLC | `scaleTime`, `scaleBand`, volume bars, crosshair tooltip |
+| [28-lollipop.html](./examples/28-lollipop.html) | Lollipop / dot plot | Sorted stems & dots, animated transitions, comparison mode |
+| [29-matrix-chart.html](./examples/29-matrix-chart.html) | Correlation matrix | Pearson correlations, `interpolateRdBu`, hover values |
+| [30-ridgeline.html](./examples/30-ridgeline.html) | Ridgeline / joy plot | Stacked KDE, `curveCatmullRom`, adjustable overlap & bandwidth |
 
 ## Procedure
 

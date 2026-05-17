@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Candlestick Chart — snow-d3 example 27</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #0f172a; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #e2e8f0; }
+    p.desc { font-size: 0.85rem; color: #94a3b8; margin-bottom: 20px; text-align: center; }
+    #chart { background: #1e293b; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    .axis text { font-size: 10px; fill: #64748b; }
+    .axis .domain { stroke: #334155; }
+    .grid .tick line { stroke: rgba(255,255,255,0.04); }
+    .candle-up   { fill: #22c55e; stroke: #22c55e; }
+    .candle-down { fill: #ef4444; stroke: #ef4444; }
+    .candle-body { cursor: pointer; }
+    .vol-bar-up   { fill: #22c55e; fill-opacity: 0.4; }
+    .vol-bar-down { fill: #ef4444; fill-opacity: 0.4; }
+    .crosshair { stroke: #475569; stroke-width: 1; stroke-dasharray: 4,3; pointer-events: none; }
+    .crosshair-label { font-size: 10px; fill: white; pointer-events: none; }
+    .ohlc-readout { font-size: 11px; fill: #94a3b8; }
+    .ohlc-readout.up { fill: #22c55e; }
+    .ohlc-readout.down { fill: #ef4444; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #334155; border-radius: 4px; background: #1e293b; color: #cbd5e1; cursor: pointer; font-size: 13px; }
+    button:hover { background: #334155; }
+    button.active { background: #3b82f6; border-color: #3b82f6; color: white; }
+  </style>
+</head>
+<body>
+<h1>D3 Candlestick / OHLC Chart</h1>
+<p class="desc">Stock price visualization with volume bars and crosshair tooltip. Uses <code>scaleTime</code>, <code>scaleBand</code>, mouse tracking, and simulated OHLC data.</p>
+<div class="controls">
+  <button id="btn-90">90D</button>
+  <button id="btn-180" class="active">180D</button>
+  <button id="btn-365">365D</button>
+  <button id="btn-gen">New Stock</button>
+</div>
+<div id="chart"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Synthetic OHLC ────────────────────────────────────────────────────────
+function genOHLC(n, startPrice = 150) {
+  const data = [];
+  let price = startPrice;
+  const startDate = d3.timeDay.offset(new Date(), -n);
+  let i = 0;
+  d3.timeDays(startDate, new Date()).forEach(date => {
+    if (date.getDay() === 0 || date.getDay() === 6) return; // skip weekends
+    const volatility = 0.012 + Math.random() * 0.018;
+    const change = (Math.random() - 0.49) * price * volatility;
+    const open  = price;
+    const close = Math.max(10, price + change);
+    const high  = Math.max(open, close) * (1 + Math.random() * 0.008);
+    const low   = Math.min(open, close) * (1 - Math.random() * 0.008);
+    const volume = Math.round(1e6 + Math.random() * 5e6);
+    data.push({ date, open, high, low, close, volume });
+    price = close;
+    i++;
+  });
+  return data;
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 860, height = 520;
+const mainH = height * 0.72;
+const volH  = height * 0.18;
+const gap   = height * 0.04;
+const margin = { top: 36, right: 60, bottom: 30, left: 10 };
+const innerW = width - margin.left - margin.right;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+let days = 180;
+let allData = genOHLC(400);
+
+const crossG = svg.append("g").attr("class","crosshair-g").style("pointer-events","none");
+
+// OHLC readout
+const readout = svg.append("text").attr("class","ohlc-readout")
+  .attr("x", margin.left + 4).attr("y",16);
+
+function getView() {
+  return allData.slice(-days);
+}
+
+function render() {
+  g.selectAll("*").remove();
+  crossG.selectAll("*").remove();
+
+  const data = getView();
+  if (data.length === 0) return;
+
+  const xScale = d3.scaleBand()
+    .domain(data.map(d => d.date))
+    .range([0, innerW]).padding(0.2);
+
+  const priceExt = [
+    d3.min(data, d => d.low) * 0.995,
+    d3.max(data, d => d.high) * 1.005
+  ];
+  const yPrice = d3.scaleLinear().domain(priceExt).range([mainH, 0]).nice();
+  const yVol   = d3.scaleLinear().domain([0, d3.max(data, d => d.volume)]).range([volH, 0]);
+
+  const volTop = mainH + gap;
+
+  // ── Grid ─────────────────────────────────────────────────────────────────
+  g.append("g").attr("class","axis grid")
+    .call(d3.axisRight(yPrice).ticks(6).tickSize(innerW).tickFormat(""))
+    .call(a => a.select(".domain").remove())
+    .call(a => a.selectAll(".tick line").attr("stroke","rgba(255,255,255,0.04)"));
+
+  // ── Axes ─────────────────────────────────────────────────────────────────
+  const xFmt = days <= 90 ? d3.timeFormat("%b %d") : d3.timeFormat("%b '%y");
+  const xEvery = days <= 90 ? d3.timeWeek.every(2) : d3.timeMonth.every(1);
+
+  g.append("g").attr("class","axis x-axis")
+    .attr("transform",`translate(0,${mainH})`)
+    .call(d3.axisBottom(xScale).tickValues(data.filter(d => {
+      const m = xEvery;
+      // tick ~every N items
+      const step = Math.max(1, Math.round(data.length / 10));
+      return data.indexOf(d) % step === 0;
+    }).map(d=>d.date))
+    .tickFormat(d3.timeFormat(days<=90 ? "%b %d" : "%b '%y")));
+
+  g.append("g").attr("class","axis y-axis")
+    .attr("transform",`translate(${innerW},0)`)
+    .call(d3.axisRight(yPrice).ticks(6).tickFormat(d => `$${d3.format(",.0f")(d)}`));
+
+  // ── Volume ────────────────────────────────────────────────────────────────
+  data.forEach(d => {
+    const x  = xScale(d.date);
+    const bw = xScale.bandwidth();
+    const cls = d.close >= d.open ? "vol-bar-up" : "vol-bar-down";
+    g.append("rect").attr("class",cls)
+      .attr("x",x).attr("width",bw)
+      .attr("y",volTop + yVol(d.volume))
+      .attr("height",volH - yVol(d.volume));
+  });
+
+  // ── Candles ────────────────────────────────────────────────────────────────
+  data.forEach(d => {
+    const x   = xScale(d.date);
+    const bw  = xScale.bandwidth();
+    const cx  = x + bw/2;
+    const cls = d.close >= d.open ? "candle-up" : "candle-down";
+
+    // Wick
+    g.append("line").attr("class",cls)
+      .attr("x1",cx).attr("x2",cx)
+      .attr("y1",yPrice(d.high)).attr("y2",yPrice(d.low))
+      .attr("stroke-width",1);
+
+    // Body
+    const bodyY = yPrice(Math.max(d.open, d.close));
+    const bodyH = Math.max(1, Math.abs(yPrice(d.open) - yPrice(d.close)));
+    g.append("rect").attr("class","candle-body " + cls)
+      .attr("x",x).attr("width",bw)
+      .attr("y",bodyY).attr("height",bodyH);
+  });
+
+  // ── Crosshair ─────────────────────────────────────────────────────────────
+  const overlay = svg.append("rect")
+    .attr("x", margin.left).attr("y", margin.top)
+    .attr("width",innerW).attr("height",mainH + volH + gap)
+    .attr("fill","transparent");
+
+  overlay.on("mousemove", (event) => {
+    const [mx, my] = d3.pointer(event, svg.node());
+    const rx = mx - margin.left;
+    const ry = my - margin.top;
+    crossG.selectAll("*").remove();
+
+    // Crosshair lines
+    crossG.append("line").attr("class","crosshair")
+      .attr("x1",margin.left).attr("x2",margin.left+innerW)
+      .attr("y1",my).attr("y2",my);
+    crossG.append("line").attr("class","crosshair")
+      .attr("x1",mx).attr("x2",mx)
+      .attr("y1",margin.top).attr("y2",margin.top+mainH+gap+volH);
+
+    // Y label
+    if (ry >= 0 && ry <= mainH) {
+      const val = yPrice.invert(ry);
+      crossG.append("rect").attr("x",margin.left+innerW).attr("y",my-9)
+        .attr("width",56).attr("height",18).attr("fill","#475569").attr("rx",3);
+      crossG.append("text").attr("class","crosshair-label")
+        .attr("x",margin.left+innerW+4).attr("y",my+4)
+        .text(`$${d3.format(",.2f")(val)}`);
+    }
+
+    // Find nearest candle
+    const idx = Math.round(rx / xScale.step() - xScale.paddingInner()/2);
+    const d = data[Math.max(0, Math.min(data.length-1, idx))];
+    if (d) {
+      const chg = d.close - d.open;
+      const cls = chg >= 0 ? "up" : "down";
+      readout.attr("class","ohlc-readout " + cls)
+        .text(`${d3.timeFormat("%b %d, %Y")(d.date)}  O:$${d.open.toFixed(2)}  H:$${d.high.toFixed(2)}  L:$${d.low.toFixed(2)}  C:$${d.close.toFixed(2)}  ${chg>=0?"+":""}${chg.toFixed(2)}  Vol:${d3.format(",.0f")(d.volume)}`);
+    }
+  })
+  .on("mouseout", () => { crossG.selectAll("*").remove(); readout.text(""); });
+}
+
+d3.select("#btn-90").on("click",function(){ days=90; d3.selectAll(".controls button").classed("active",false); d3.select(this).classed("active",true); render(); });
+d3.select("#btn-180").on("click",function(){ days=180; d3.selectAll(".controls button").classed("active",false); d3.select(this).classed("active",true); render(); });
+d3.select("#btn-365").on("click",function(){ days=365; d3.selectAll(".controls button").classed("active",false); d3.select(this).classed("active",true); render(); });
+d3.select("#btn-gen").on("click", () => { allData = genOHLC(400, 80 + Math.random()*300); render(); });
+
+render();
+</script>
+</body>
+</html>

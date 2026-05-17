@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Voronoi Diagram — snow-d3 example 25</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); cursor: crosshair; }
+    .cell { transition: fill-opacity 0.15s; }
+    .cell:hover { fill-opacity: 0.85; }
+    .mesh-line { fill: none; stroke: white; stroke-width: 0.8; pointer-events: none; }
+    .site-dot { cursor: pointer; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Voronoi Diagram</h1>
+<p class="desc">Click to add a site. Hover a cell to see its center. Move mouse to highlight nearest site.<br>Uses <code>d3.Delaunay.from()</code>, <code>.voronoi()</code>, <code>schemeTableau10</code>.</p>
+<div class="controls">
+  <button id="btn-cells" class="active">Cells</button>
+  <button id="btn-mesh">Mesh only</button>
+  <button id="btn-dots">Points only</button>
+  <button id="btn-scatter">New scatter</button>
+  <button id="btn-clear">Clear all</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 720, height = 480;
+const color = d3.scaleOrdinal(d3.schemeTableau10);
+const tooltip = d3.select("#tooltip");
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const cellG = svg.append("g");
+const meshG = svg.append("g");
+const dotG  = svg.append("g");
+const nearG = svg.append("g"); // highlight nearest
+
+let mode = "cells";
+let sites = genScatter(60);
+
+function genScatter(n) {
+  return d3.range(n).map((_, i) => ({
+    id: i,
+    x: Math.random() * (width - 40) + 20,
+    y: Math.random() * (height - 40) + 20,
+    cat: Math.floor(Math.random() * 10)
+  }));
+}
+
+let nextId = sites.length;
+
+function render() {
+  cellG.selectAll("*").remove();
+  meshG.selectAll("*").remove();
+  dotG.selectAll("*").remove();
+  nearG.selectAll("*").remove();
+
+  if (sites.length < 2) return;
+
+  const pts = sites.map(s => [s.x, s.y]);
+  const delaunay = d3.Delaunay.from(pts);
+  const voronoi  = delaunay.voronoi([0, 0, width, height]);
+
+  // Cells
+  if (mode === "cells" || mode === "mesh") {
+    cellG.selectAll(".cell")
+      .data(sites)
+      .join("path")
+        .attr("class","cell")
+        .attr("d", (d, i) => voronoi.renderCell(i))
+        .attr("fill", d => mode === "cells" ? color(d.cat) : "none")
+        .attr("fill-opacity", 0.55)
+        .attr("stroke", "white")
+        .attr("stroke-width", mode === "cells" ? 0 : 1)
+        .on("mouseover", (event, d) => {
+          tooltip.html(
+            `Site #${d.id}<br>` +
+            `x: ${d.x.toFixed(1)}, y: ${d.y.toFixed(1)}`
+          ).style("opacity",1);
+        })
+        .on("mousemove", event => {
+          tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+          // Nearest highlight
+          const [mx, my] = d3.pointer(event, svg.node());
+          const ni = delaunay.find(mx, my);
+          nearG.selectAll("*").remove();
+          if (ni >= 0) {
+            nearG.append("circle")
+              .attr("cx", sites[ni].x).attr("cy", sites[ni].y)
+              .attr("r", 10).attr("fill","none")
+              .attr("stroke","#fff").attr("stroke-width",2.5);
+          }
+        })
+        .on("mouseout", () => { tooltip.style("opacity",0); nearG.selectAll("*").remove(); });
+  }
+
+  // Mesh (for "mesh only")
+  if (mode === "mesh") {
+    meshG.append("path").attr("class","mesh-line")
+      .attr("d", voronoi.render())
+      .attr("stroke","#999").attr("stroke-width",1).attr("fill","none");
+  }
+
+  // Dots
+  if (mode !== "mesh") {
+    dotG.selectAll(".site-dot")
+      .data(sites)
+      .join("circle")
+        .attr("class","site-dot")
+        .attr("cx",d=>d.x).attr("cy",d=>d.y)
+        .attr("r", 4)
+        .attr("fill", d => color(d.cat))
+        .attr("stroke","white").attr("stroke-width",1.5);
+  }
+}
+
+// Click to add site
+svg.on("click", (event) => {
+  const [x, y] = d3.pointer(event);
+  sites.push({ id: nextId++, x, y, cat: Math.floor(Math.random() * 10) });
+  render();
+});
+
+// Mode buttons
+function setMode(m) {
+  mode = m;
+  d3.selectAll(".controls button").classed("active",false);
+  render();
+}
+d3.select("#btn-cells").on("click",function(){ setMode("cells"); d3.select(this).classed("active",true); });
+d3.select("#btn-mesh").on("click", function(){ setMode("mesh");  d3.select(this).classed("active",true); });
+d3.select("#btn-dots").on("click", function(){ setMode("dots");  d3.select(this).classed("active",true); });
+d3.select("#btn-scatter").on("click",() => { sites = genScatter(60); nextId = sites.length; render(); });
+d3.select("#btn-clear").on("click",()   => { sites = []; render(); });
+
+render();
+</script>
+</body>
+</html>

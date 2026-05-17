@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Box Plot + Violin — snow-d3 example 18</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .grid .tick line { stroke: #eee; }
+    .grid .domain { display: none; }
+    .violin-path { opacity: 0.55; }
+    .box-rect { opacity: 0.85; }
+    .whisker { stroke-width: 1.5; }
+    .median-line { stroke-width: 2.5; }
+    .outlier { opacity: 0.6; cursor: pointer; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Box Plot + Violin Chart</h1>
+<p class="desc">Box plot with optional violin overlay showing distribution shape. Uses <code>d3.bin()</code>, <code>d3.area()</code> with <code>curveCardinal</code> for violin bodies.</p>
+<div class="controls">
+  <button id="btn-box" class="active">Box Plot</button>
+  <button id="btn-violin">Violin</button>
+  <button id="btn-both">Both</button>
+  <button id="btn-jitter">Toggle Jitter</button>
+  <button id="btn-resample">Resample</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const GROUPS = ["Control","Treatment A","Treatment B","Treatment C","Treatment D"];
+const color  = d3.scaleOrdinal(d3.schemeTableau10).domain(GROUPS);
+const N_PER_GROUP = 120;
+
+function normal(mean, sd) {
+  const u = Math.random(), v = Math.random();
+  return mean + sd * Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+}
+
+function genGroup(mean, sd, skew = 0) {
+  return d3.range(N_PER_GROUP).map(() => {
+    let v = normal(mean, sd);
+    if (skew !== 0 && Math.random() < 0.2) v += normal(skew, sd * 0.5);
+    return v;
+  });
+}
+
+function makeData() {
+  return {
+    "Control":     genGroup(50, 8),
+    "Treatment A": genGroup(58, 10, 20),
+    "Treatment B": genGroup(45, 6),
+    "Treatment C": genGroup(65, 14, -10),
+    "Treatment D": genGroup(53, 9),
+  };
+}
+
+function calcStats(arr) {
+  const sorted = [...arr].sort(d3.ascending);
+  const q1  = d3.quantile(sorted, 0.25);
+  const med = d3.quantile(sorted, 0.5);
+  const q3  = d3.quantile(sorted, 0.75);
+  const iqr = q3 - q1;
+  const min = d3.max([d3.min(sorted), q1 - 1.5*iqr]);
+  const max = d3.min([d3.max(sorted), q3 + 1.5*iqr]);
+  const outliers = arr.filter(v => v < min || v > max);
+  return { q1, med, q3, min, max, mean: d3.mean(arr), outliers };
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 760, height = 460;
+const margin = { top: 20, right: 20, bottom: 50, left: 50 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+const xScale = d3.scaleBand().domain(GROUPS).range([0,innerW]).paddingOuter(0.2).paddingInner(0.4);
+const yScale = d3.scaleLinear().range([innerH, 0]);
+
+const xAxisG = g.append("g").attr("class","axis x-axis").attr("transform",`translate(0,${innerH})`);
+const yAxisG = g.append("g").attr("class","axis y-axis");
+const gridG  = g.append("g").attr("class","axis grid");
+
+svg.append("text").attr("x",margin.left+innerW/2).attr("y",height-8)
+  .attr("text-anchor","middle").style("font-size","12px").style("fill","#777").text("Group");
+svg.append("text").attr("transform","rotate(-90)").attr("x",-(margin.top+innerH/2)).attr("y",14)
+  .attr("text-anchor","middle").style("font-size","12px").style("fill","#777").text("Value");
+
+const tooltip = d3.select("#tooltip");
+let showMode = "box"; // box | violin | both
+let showJitter = false;
+let groupData = makeData();
+
+function render() {
+  const allVals = Object.values(groupData).flat();
+  yScale.domain([d3.min(allVals) - 5, d3.max(allVals) + 5]).nice();
+
+  gridG.call(d3.axisLeft(yScale).ticks(6).tickSize(-innerW).tickFormat(""))
+    .call(a => a.select(".domain").remove())
+    .call(a => a.selectAll(".tick line").attr("stroke","#eee"));
+  xAxisG.call(d3.axisBottom(xScale));
+  yAxisG.call(d3.axisLeft(yScale).ticks(6));
+
+  const bw = xScale.bandwidth();
+
+  g.selectAll(".group-g").remove();
+  const gp = g.selectAll(".group-g")
+    .data(GROUPS)
+    .join("g")
+      .attr("class","group-g")
+      .attr("transform", d => `translate(${xScale(d)},0)`);
+
+  // ── Violin ──────────────────────────────────────────────────────────────
+  if (showMode === "violin" || showMode === "both") {
+    gp.each(function(name) {
+      const vals = groupData[name];
+      const [yMin, yMax] = yScale.domain();
+      const thresholds = yScale.ticks(30);
+      const bins = d3.bin().domain([yMin,yMax]).thresholds(thresholds)(vals);
+      const maxCount = d3.max(bins, b => b.length);
+      const vScale = d3.scaleLinear().domain([0,maxCount]).range([0, bw/2 * 0.9]);
+
+      const areaGen = d3.area()
+        .x0(b => -vScale(b.length))
+        .x1(b => +vScale(b.length))
+        .y(b  => yScale((b.x0 + b.x1) / 2))
+        .curve(d3.curveCatmullRom);
+
+      d3.select(this).append("path").attr("class","violin-path")
+        .attr("fill", color(name))
+        .attr("d", areaGen(bins))
+        .attr("transform",`translate(${bw/2},0)`);
+    });
+  }
+
+  // ── Box ──────────────────────────────────────────────────────────────────
+  if (showMode === "box" || showMode === "both") {
+    gp.each(function(name) {
+      const s = calcStats(groupData[name]);
+      const el = d3.select(this);
+      const bx = bw * 0.2, bxW = bw * 0.6;
+      const bxCx = bw / 2;
+
+      // Whiskers
+      el.append("line").attr("class","whisker").attr("stroke",color(name))
+        .attr("x1",bxCx).attr("x2",bxCx)
+        .attr("y1",yScale(s.min)).attr("y2",yScale(s.q1));
+      el.append("line").attr("class","whisker").attr("stroke",color(name))
+        .attr("x1",bxCx).attr("x2",bxCx)
+        .attr("y1",yScale(s.q3)).attr("y2",yScale(s.max));
+      // Whisker caps
+      [s.min, s.max].forEach(v => {
+        el.append("line").attr("stroke",color(name)).attr("stroke-width",1.5)
+          .attr("x1",bxCx - bxW*0.3).attr("x2",bxCx + bxW*0.3)
+          .attr("y1",yScale(v)).attr("y2",yScale(v));
+      });
+
+      // IQR box
+      el.append("rect").attr("class","box-rect")
+        .attr("x",bx).attr("width",bxW)
+        .attr("y",yScale(s.q3)).attr("height",yScale(s.q1) - yScale(s.q3))
+        .attr("fill",color(name)).attr("stroke",d3.color(color(name)).darker(0.6)).attr("stroke-width",1)
+        .on("mouseover",(event) => {
+          tooltip.html(
+            `<strong style="color:${color(name)}">${name}</strong><br>` +
+            `Max: ${s.max.toFixed(1)}<br>Q3: ${s.q3.toFixed(1)}<br>` +
+            `Median: ${s.med.toFixed(1)}<br>Q1: ${s.q1.toFixed(1)}<br>` +
+            `Min: ${s.min.toFixed(1)}<br>Mean: ${s.mean.toFixed(1)}`
+          ).style("opacity",1);
+        })
+        .on("mousemove",event => tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-60)+"px"))
+        .on("mouseout",() => tooltip.style("opacity",0));
+
+      // Median line
+      el.append("line").attr("class","median-line").attr("stroke","white")
+        .attr("x1",bx).attr("x2",bx+bxW)
+        .attr("y1",yScale(s.med)).attr("y2",yScale(s.med));
+
+      // Outliers
+      s.outliers.forEach(v => {
+        el.append("circle").attr("class","outlier")
+          .attr("cx", bxCx + (Math.random()-0.5)*bxW*0.6)
+          .attr("cy",yScale(v)).attr("r",3)
+          .attr("fill",color(name)).attr("stroke","white").attr("stroke-width",0.5);
+      });
+    });
+  }
+
+  // ── Jitter ────────────────────────────────────────────────────────────────
+  if (showJitter) {
+    gp.each(function(name) {
+      const vals = groupData[name];
+      d3.select(this).selectAll(".jitter-dot")
+        .data(vals).join("circle")
+          .attr("class","jitter-dot")
+          .attr("cx", () => bw/2 + (Math.random()-0.5) * bw * 0.55)
+          .attr("cy", v => yScale(v))
+          .attr("r", 2)
+          .attr("fill", color(name)).attr("fill-opacity", 0.25)
+          .attr("stroke","none");
+    });
+  }
+}
+
+d3.select("#btn-box").on("click", function() {
+  showMode="box"; d3.selectAll("button.active").classed("active",false); d3.select(this).classed("active",true); render();
+});
+d3.select("#btn-violin").on("click", function() {
+  showMode="violin"; d3.selectAll("button.active").classed("active",false); d3.select(this).classed("active",true); render();
+});
+d3.select("#btn-both").on("click", function() {
+  showMode="both"; d3.selectAll("button.active").classed("active",false); d3.select(this).classed("active",true); render();
+});
+d3.select("#btn-jitter").on("click", () => { showJitter = !showJitter; render(); });
+d3.select("#btn-resample").on("click", () => { groupData = makeData(); render(); });
+
+render();
+</script>
+</body>
+</html>

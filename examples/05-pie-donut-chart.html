@@ -9,11 +9,12 @@
     body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
     h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
     p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; }
-    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); display: flex; }
-    .slice { cursor: pointer; transition: opacity 0.2s; }
-    .slice:hover { opacity: 0.85; }
-    .slice.active { opacity: 1; }
-    .center-text { pointer-events: none; text-anchor: middle; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .slice-path { cursor: pointer; }
+    .slice-path:hover { opacity: 0.82; }
+    .center-text { pointer-events: none; text-anchor: middle; dominant-baseline: middle; }
+    .poly-line { fill: none; stroke: #aaa; stroke-width: 1; pointer-events: none; }
+    .slice-label { font-size: 11px; fill: #444; pointer-events: none; }
     .controls { margin-bottom: 12px; display: flex; gap: 10px; }
     button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
     button:hover { background: #eee; }
@@ -21,8 +22,7 @@
     .tooltip {
       position: fixed; background: rgba(20,20,20,0.9); color: #fff;
       padding: 8px 12px; border-radius: 6px; font-size: 12px;
-      pointer-events: none; opacity: 0; transition: opacity 0.1s;
-      line-height: 1.6;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
     }
   </style>
 </head>
@@ -52,150 +52,92 @@ let isDonut = false;
 let activeSlice = null;
 
 // ── Dimensions ────────────────────────────────────────────────────────────
-const width = 500, height = 500;
-const radius = Math.min(width, height) / 2 - 30;
+const width = 560, height = 500;
+const cx = width / 2, cy = height / 2;
+const outerRadius = Math.min(width, height) / 2 - 50;
+const explodeOffset = 14;
+let innerRadius = 0;
 
 const svg = d3.select("#chart").append("svg")
   .attr("width", width).attr("height", height)
   .attr("viewBox", `0 0 ${width} ${height}`)
   .style("max-width","100%").style("height","auto");
 
-const pieG = svg.append("g")
-  .attr("transform",`translate(${width/2},${height/2})`);
+const pieG = svg.append("g").attr("transform", `translate(${cx},${cy})`);
 
-// ── Arc generators ────────────────────────────────────────────────────────
-let innerRadius = 0;
-const outerRadius = radius;
-const explodeOffset = 14;
-
-const arcGen = d => d3.arc()({
-  innerRadius,
-  outerRadius,
-  startAngle: d.startAngle,
-  endAngle:   d.endAngle,
-});
-
-const arcGenFn = () => d3.arc()
-  .innerRadius(innerRadius)
-  .outerRadius(outerRadius);
-
-const arcLabel = d3.arc()
-  .innerRadius(outerRadius + 20)
-  .outerRadius(outerRadius + 20);
-
-const arcPolyOuter = d3.arc()
-  .innerRadius(outerRadius + 4)
-  .outerRadius(outerRadius + 4);
+// ── Arc & label arc generators (functions so they read current innerRadius) ──
+function makeArc() {
+  return d3.arc().innerRadius(innerRadius).outerRadius(outerRadius);
+}
+const arcLabelR  = outerRadius + 22;
+const arcPolyR   = outerRadius + 6;
 
 // ── Pie generator ─────────────────────────────────────────────────────────
-const pieGen = d3.pie()
-  .value(d => d.value)
-  .sort(null)
-  .padAngle(0.02);
+const pieGen = d3.pie().value(d => d.value).sort(null).padAngle(0.025);
 
-// ── Render ────────────────────────────────────────────────────────────────
+// ── Tooltip ────────────────────────────────────────────────────────────────
 const tooltip = d3.select("#tooltip");
 
 function midAngle(d) { return d.startAngle + (d.endAngle - d.startAngle) / 2; }
 
+function explodeTransform(d) {
+  if (activeSlice !== d.data.name) return "translate(0,0)";
+  const a = midAngle(d);
+  return `translate(${Math.sin(a) * explodeOffset},${-Math.cos(a) * explodeOffset})`;
+}
+
+// ── Render ────────────────────────────────────────────────────────────────
 function render(animate = true) {
   const piePath = pieGen(data);
   const dur = animate ? 600 : 0;
+  const arc = makeArc();
 
-  // Slices
-  const slices = pieG.selectAll(".slice")
+  // ── Slice <g> wrappers (keyed by name) ───────────────────────────────
+  // Each wrapper holds: <path> for the arc, so we can apply transform to the <g>
+  const sliceGs = pieG.selectAll("g.slice")
     .data(piePath, d => d.data.name)
     .join(
-      enter => enter.append("path")
-        .attr("class","slice")
-        .attr("fill", d => color(d.data.name))
-        .each(function(d) { this._current = { startAngle: d.startAngle, endAngle: d.startAngle }; })
-        .call(attachEvents),
-      update => update.call(attachEvents),
-      exit => exit.transition().duration(dur/2)
-        .attrTween("d", function(d) {
-          const i = d3.interpolate(this._current, { startAngle: d.endAngle, endAngle: d.endAngle });
-          return t => arcGenFn()(i(t));
-        }).remove()
-    )
-    .transition().duration(dur).ease(d3.easeCubicOut)
-      .attrTween("d", function(d) {
-        const current = this._current || { startAngle: d.startAngle, endAngle: d.startAngle };
-        const i = d3.interpolate(current, d);
-        this._current = i(1);
-        return t => {
-          const dd = i(t);
-          const exploded = activeSlice === d.data.name;
-          const offset = exploded ? explodeOffset : 0;
-          const angle = midAngle(dd);
-          const tx = Math.sin(angle) * offset;
-          const ty = -Math.cos(angle) * offset;
-          return `translate(${tx},${ty})` + d3.arc().innerRadius(innerRadius).outerRadius(outerRadius)(dd);
-        };
-      });
+      enter => {
+        const gEl = enter.append("g").attr("class","slice");
+        gEl.append("path")
+          .attr("class","slice-path")
+          .attr("fill", d => color(d.data.name))
+          .each(function(d) { this._prev = { startAngle: d.startAngle, endAngle: d.startAngle }; })
+          .on("mouseover", (event, d) => {
+            const pct = (d.data.value / d3.sum(data, x => x.value) * 100).toFixed(1);
+            tooltip.html(
+              `<strong style="color:${color(d.data.name)}">${d.data.name}</strong><br>` +
+              `Value: ${d.data.value}<br>Share: ${pct}%`
+            ).style("opacity",1);
+          })
+          .on("mousemove", event => {
+            tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+          })
+          .on("mouseout", () => tooltip.style("opacity",0))
+          .on("click", (event, d) => {
+            activeSlice = activeSlice === d.data.name ? null : d.data.name;
+            render();
+          });
+        return gEl;
+      },
+      update => update,
+      exit => exit.transition().duration(dur / 2)
+        .attr("transform","translate(0,0)")
+        .select("path")
+          .attrTween("d", function(d) {
+            const prev = this._prev || d;
+            const i = d3.interpolate(prev, { startAngle: d.startAngle, endAngle: d.startAngle });
+            return t => makeArc()(i(t));
+          })
+        .selection().remove()
+    );
 
-  // Labels — polylines + text
-  const labelData = piePath.filter(d => (d.endAngle - d.startAngle) > 0.25);
+  // Animate <g> transform for explode
+  sliceGs.transition().duration(dur).ease(d3.easeCubicOut)
+    .attr("transform", explodeTransform);
 
-  pieG.selectAll(".poly-line")
-    .data(labelData, d => d.data.name)
-    .join("polyline")
-      .attr("class","poly-line")
-      .attr("fill","none").attr("stroke","#aaa").attr("stroke-width",1)
-      .transition().duration(dur)
-        .attrTween("points", function(d) {
-          const cur = this._cur || d;
-          const i = d3.interpolate(cur, d);
-          this._cur = d;
-          return t => {
-            const dd = i(t);
-            const a = midAngle(dd);
-            const pos = arcLabel.centroid(dd);
-            pos[0] = (outerRadius + 32) * (a < Math.PI ? 1 : -1);
-            return [arcPolyOuter.centroid(dd), arcLabel.centroid(dd), pos];
-          };
-        });
-
-  pieG.selectAll(".slice-label")
-    .data(labelData, d => d.data.name)
-    .join("text")
-      .attr("class","slice-label")
-      .style("font-size","11px").style("fill","#444")
-      .transition().duration(dur)
-        .attrTween("transform", function(d) {
-          const cur = this._cur || d;
-          const i = d3.interpolate(cur, d);
-          this._cur = d;
-          return t => {
-            const dd = i(t);
-            const a = midAngle(dd);
-            const pos = arcLabel.centroid(dd);
-            pos[0] = (outerRadius + 36) * (a < Math.PI ? 1 : -1);
-            return `translate(${pos})`;
-          };
-        })
-        .attrTween("text-anchor", function(d) {
-          return () => midAngle(d) < Math.PI ? "start" : "end";
-        })
-        .tween("text", function(d) {
-          return () => { this.textContent = `${d.data.name} (${d.data.value})`; };
-        });
-
-  // Center text for donut
-  pieG.selectAll(".center-text").remove();
-  if (isDonut) {
-    const total = d3.sum(data, d => d.value);
-    pieG.append("text").attr("class","center-text")
-      .attr("dy","-0.3em").style("font-size","24px").style("font-weight","600").style("fill","#222")
-      .text(total);
-    pieG.append("text").attr("class","center-text")
-      .attr("dy","1.2em").style("font-size","13px").style("fill","#888")
-      .text("total");
-  }
-}
-
-function attachEvents(sel) {
-  sel
+  // Animate arc path (pure path data, no translate prefix)
+  sliceGs.select("path")
     .on("mouseover", (event, d) => {
       const pct = (d.data.value / d3.sum(data, x => x.value) * 100).toFixed(1);
       tooltip.html(
@@ -210,7 +152,60 @@ function attachEvents(sel) {
     .on("click", (event, d) => {
       activeSlice = activeSlice === d.data.name ? null : d.data.name;
       render();
-    });
+    })
+    .transition().duration(dur).ease(d3.easeCubicOut)
+      .attrTween("d", function(d) {
+        const prev = this._prev || { startAngle: d.startAngle, endAngle: d.startAngle };
+        const i = d3.interpolate(prev, d);
+        this._prev = i(1);
+        return t => makeArc()(i(t));
+      });
+
+  // ── Polyline leaders ──────────────────────────────────────────────────
+  const labelData = piePath.filter(d => (d.endAngle - d.startAngle) > 0.22);
+
+  pieG.selectAll(".poly-line")
+    .data(labelData, d => d.data.name)
+    .join("polyline")
+      .attr("class","poly-line")
+      .transition().duration(dur)
+        .attr("points", d => {
+          const a = midAngle(d);
+          const inner = d3.arc().innerRadius(arcPolyR).outerRadius(arcPolyR).centroid(d);
+          const mid   = d3.arc().innerRadius(arcLabelR - 8).outerRadius(arcLabelR - 8).centroid(d);
+          const outer = [(arcLabelR + 6) * (a < Math.PI ? 1 : -1), mid[1]];
+          return [inner, mid, outer];
+        });
+
+  // ── Labels ─────────────────────────────────────────────────────────────
+  pieG.selectAll(".slice-label")
+    .data(labelData, d => d.data.name)
+    .join("text")
+      .attr("class","slice-label")
+      .transition().duration(dur)
+        .attr("transform", d => {
+          const a = midAngle(d);
+          const mid = d3.arc().innerRadius(arcLabelR - 8).outerRadius(arcLabelR - 8).centroid(d);
+          const x = (arcLabelR + 10) * (a < Math.PI ? 1 : -1);
+          return `translate(${x},${mid[1]})`;
+        })
+        .attr("text-anchor", d => midAngle(d) < Math.PI ? "start" : "end")
+        .attr("dominant-baseline","middle")
+        .tween("text", function(d) {
+          return () => { this.textContent = `${d.data.name} (${d.data.value})`; };
+        });
+
+  // ── Donut center text ──────────────────────────────────────────────────
+  pieG.selectAll(".center-text").remove();
+  if (isDonut) {
+    const total = d3.sum(data, d => d.value);
+    pieG.append("text").attr("class","center-text")
+      .attr("y", -14).style("font-size","26px").style("font-weight","700").style("fill","#222")
+      .text(total);
+    pieG.append("text").attr("class","center-text")
+      .attr("y", 14).style("font-size","13px").style("fill","#888")
+      .text("total");
+  }
 }
 
 // ── Controls ──────────────────────────────────────────────────────────────
@@ -219,7 +214,7 @@ d3.select("#btn-pie").on("click", function() {
   setActive(this); render();
 });
 d3.select("#btn-donut").on("click", function() {
-  isDonut = true; innerRadius = radius * 0.55;
+  isDonut = true; innerRadius = outerRadius * 0.55;
   setActive(this); render();
 });
 d3.select("#btn-shuffle").on("click", () => { data = makeData(); activeSlice = null; render(); });

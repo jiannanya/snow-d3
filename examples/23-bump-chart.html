@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Bump Chart — snow-d3 example 23</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .bump-line { fill: none; stroke-width: 3; transition: stroke-opacity 0.2s, stroke-width 0.1s; cursor: pointer; }
+    .bump-line:hover { stroke-width: 5; }
+    .rank-dot { cursor: pointer; }
+    .rank-badge { font-size: 10px; font-weight: 600; fill: white; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+    .period-label { font-size: 11px; fill: #777; text-anchor: middle; }
+    .name-label { font-size: 12px; font-weight: 500; dominant-baseline: middle; }
+    .grid-line { stroke: #f0f0f0; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Bump / Ranking Chart</h1>
+<p class="desc">Rank of programming languages over time. Hover to highlight. Uses <code>scalePoint</code>, <code>d3.line()</code> with <code>curveBumpX</code>, and rank badges.</p>
+<div class="controls">
+  <button id="btn-resample">Randomize</button>
+  <button id="btn-labels">Toggle Labels</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const LANGS = ["Python","JavaScript","TypeScript","Rust","Go","Java","C++","Kotlin","Swift","Julia"];
+const PERIODS = ["Q1 '23","Q2 '23","Q3 '23","Q4 '23","Q1 '24","Q2 '24","Q3 '24","Q4 '24","Q1 '25"];
+const color = d3.scaleOrdinal(d3.schemeTableau10).domain(LANGS);
+
+function makeData() {
+  // Each period: assign ranks (no ties)
+  const data = {};
+  LANGS.forEach(l => data[l] = []);
+
+  PERIODS.forEach((period, pi) => {
+    // Shuffle with some persistence from prior period
+    const prevScores = LANGS.map((l,i) => ({
+      lang: l,
+      score: (pi === 0 ? i : data[l][pi-1] - 1) + (Math.random() - 0.42) * 3
+    }));
+    prevScores.sort((a,b) => a.score - b.score);
+    prevScores.forEach((entry, rank) => {
+      data[entry.lang].push(rank + 1);
+    });
+  });
+
+  return LANGS.map(name => ({
+    name,
+    ranks: PERIODS.map((p, i) => ({ period: p, rank: data[name][i] }))
+  }));
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 820, height = 460;
+const margin = { top: 30, right: 120, bottom: 40, left: 90 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+const n = LANGS.length;
+const xScale = d3.scalePoint().domain(PERIODS).range([0, innerW]).padding(0.4);
+const yScale = d3.scalePoint().domain(d3.range(1, n+1)).range([0, innerH]).padding(0.4);
+
+const tooltip = d3.select("#tooltip");
+let showLabels = true;
+let seriesData = makeData();
+let hovered = null;
+
+function render() {
+  g.selectAll("*").remove();
+
+  // Grid (horizontal rank lines)
+  d3.range(1, n+1).forEach(rank => {
+    g.append("line").attr("class","grid-line")
+      .attr("x1",0).attr("x2",innerW)
+      .attr("y1",yScale(rank)).attr("y2",yScale(rank));
+  });
+
+  // Period labels
+  PERIODS.forEach(p => {
+    g.append("text").attr("class","period-label")
+      .attr("x",xScale(p)).attr("y",-14).text(p);
+  });
+
+  // Lines + dots
+  const lineGen = d3.line()
+    .x(d => xScale(d.period))
+    .y(d => yScale(d.rank))
+    .curve(d3.curveBumpX);
+
+  seriesData.forEach(series => {
+    const isHovered = hovered === series.name;
+    const opacity = hovered ? (isHovered ? 1 : 0.12) : 0.75;
+
+    // Line
+    g.append("path").attr("class","bump-line")
+      .datum(series.ranks)
+      .attr("d",lineGen)
+      .attr("stroke", color(series.name))
+      .attr("stroke-opacity", opacity)
+      .on("mouseover", () => { hovered = series.name; render(); })
+      .on("mouseout",  () => { hovered = null; render(); });
+
+    // Rank dots
+    series.ranks.forEach(d => {
+      const cx = xScale(d.period), cy = yScale(d.rank);
+      g.append("circle").attr("class","rank-dot")
+        .attr("cx",cx).attr("cy",cy).attr("r",12)
+        .attr("fill", color(series.name)).attr("fill-opacity", opacity)
+        .on("mouseover", (event) => {
+          hovered = series.name;
+          tooltip.html(
+            `<strong style="color:${color(series.name)}">${series.name}</strong><br>` +
+            `${d.period} — Rank <strong>#${d.rank}</strong>`
+          ).style("opacity",1);
+          render();
+        })
+        .on("mousemove", event => tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px"))
+        .on("mouseout", () => { hovered = null; tooltip.style("opacity",0); render(); });
+
+      g.append("text").attr("class","rank-badge")
+        .attr("x",cx).attr("y",cy)
+        .style("fill-opacity", opacity)
+        .text(d.rank);
+    });
+
+    if (showLabels) {
+      // Left label (first period)
+      const first = series.ranks[0];
+      g.append("text").attr("class","name-label")
+        .attr("x",-8).attr("y",yScale(first.rank))
+        .attr("text-anchor","end")
+        .attr("fill", color(series.name)).attr("fill-opacity", opacity)
+        .text(series.name);
+      // Right label (last period)
+      const last = series.ranks[series.ranks.length-1];
+      g.append("text").attr("class","name-label")
+        .attr("x",innerW+8).attr("y",yScale(last.rank))
+        .attr("text-anchor","start")
+        .attr("fill", color(series.name)).attr("fill-opacity", opacity)
+        .text(series.name);
+    }
+  });
+}
+
+d3.select("#btn-resample").on("click", () => { seriesData = makeData(); render(); });
+d3.select("#btn-labels").on("click", () => { showLabels = !showLabels; render(); });
+
+render();
+</script>
+</body>
+</html>

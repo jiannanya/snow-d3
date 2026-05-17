@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Gantt Chart — snow-d3 example 20</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .tick line { stroke: #f0f0f0; }
+    .task-bar { cursor: pointer; rx: 3; transition: opacity 0.15s; }
+    .task-bar:hover { opacity: 0.8; }
+    .task-label { font-size: 11px; fill: white; pointer-events: none; }
+    .task-label-out { font-size: 11px; fill: #555; pointer-events: none; }
+    .today-line { stroke: #ef4444; stroke-width: 1.5; stroke-dasharray: 5,3; }
+    .legend { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #555; }
+    .legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Gantt Chart</h1>
+<p class="desc">Project timeline with tasks grouped by phase. Red line = today. Uses <code>scaleTime</code>, <code>scaleBand</code>, <code>schemeTableau10</code>, tooltip hover.</p>
+<div id="chart"></div>
+<div class="legend" id="legend"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const today = new Date(2025, 3, 15); // Apr 15, 2025
+
+const PHASES = ["Planning","Design","Development","Testing","Deployment"];
+const color = d3.scaleOrdinal(d3.schemeTableau10).domain(PHASES);
+
+const tasks = [
+  // Planning
+  { id:  1, task:"Kickoff Meeting",         phase:"Planning",    start:"2025-01-05", end:"2025-01-06", pct:100 },
+  { id:  2, task:"Stakeholder Alignment",   phase:"Planning",    start:"2025-01-07", end:"2025-01-16", pct:100 },
+  { id:  3, task:"Requirements Gathering",  phase:"Planning",    start:"2025-01-13", end:"2025-01-31", pct:100 },
+  // Design
+  { id:  4, task:"System Architecture",     phase:"Design",      start:"2025-01-28", end:"2025-02-14", pct:100 },
+  { id:  5, task:"UI/UX Wireframes",        phase:"Design",      start:"2025-02-03", end:"2025-02-21", pct:100 },
+  { id:  6, task:"Design Review",           phase:"Design",      start:"2025-02-18", end:"2025-02-26", pct:100 },
+  // Development
+  { id:  7, task:"Backend API",             phase:"Development", start:"2025-02-24", end:"2025-03-28", pct:90 },
+  { id:  8, task:"Frontend Core",           phase:"Development", start:"2025-02-24", end:"2025-03-21", pct:85 },
+  { id:  9, task:"Authentication",          phase:"Development", start:"2025-03-10", end:"2025-03-26", pct:100 },
+  { id: 10, task:"Database Migrations",     phase:"Development", start:"2025-03-17", end:"2025-04-04", pct:70 },
+  { id: 11, task:"Integration Layer",       phase:"Development", start:"2025-03-24", end:"2025-04-11", pct:40 },
+  // Testing
+  { id: 12, task:"Unit Testing",            phase:"Testing",     start:"2025-03-24", end:"2025-04-08", pct:55 },
+  { id: 13, task:"Integration Testing",     phase:"Testing",     start:"2025-04-07", end:"2025-04-25", pct:10 },
+  { id: 14, task:"Performance Testing",     phase:"Testing",     start:"2025-04-14", end:"2025-04-30", pct:0  },
+  { id: 15, task:"User Acceptance Testing", phase:"Testing",     start:"2025-04-21", end:"2025-05-09", pct:0  },
+  // Deployment
+  { id: 16, task:"Staging Deploy",          phase:"Deployment",  start:"2025-05-05", end:"2025-05-09", pct:0  },
+  { id: 17, task:"Production Deploy",       phase:"Deployment",  start:"2025-05-12", end:"2025-05-14", pct:0  },
+  { id: 18, task:"Hypercare",               phase:"Deployment",  start:"2025-05-14", end:"2025-05-30", pct:0  },
+];
+
+tasks.forEach(d => {
+  d.startDate = d3.timeParse("%Y-%m-%d")(d.start);
+  d.endDate   = d3.timeParse("%Y-%m-%d")(d.end);
+});
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 860, height = 520;
+const margin = { top: 20, right: 24, bottom: 40, left: 180 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+const rowH   = innerH / tasks.length;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+// ── Scales ────────────────────────────────────────────────────────────────
+const xScale = d3.scaleTime()
+  .domain([d3.timeDay.offset(d3.min(tasks,d=>d.startDate),-7), d3.timeDay.offset(d3.max(tasks,d=>d.endDate),7)])
+  .range([0,innerW]);
+
+const yScale = d3.scaleBand()
+  .domain(tasks.map(d => d.id))
+  .range([0,innerH])
+  .padding(0.18);
+
+// ── Grid & axes ───────────────────────────────────────────────────────────
+g.append("g").attr("class","axis grid")
+  .call(d3.axisTop(xScale).ticks(d3.timeMonth.every(1)).tickSize(innerH).tickFormat(""))
+  .call(a => a.select(".domain").remove())
+  .call(a => a.selectAll(".tick line").attr("stroke","#f0f0f0").attr("transform",`translate(0,0)`));
+
+g.append("g").attr("class","axis x-axis")
+  .call(d3.axisTop(xScale).ticks(d3.timeMonth.every(1))
+    .tickFormat(d3.timeFormat("%b '%y")))
+  .call(a => a.select(".domain").attr("stroke","#ddd"));
+
+g.append("g").attr("class","axis y-axis")
+  .call(d3.axisLeft(yScale).tickFormat(id => tasks.find(t => t.id === id)?.task ?? ""))
+  .call(a => a.select(".domain").attr("stroke","#ddd"))
+  .selectAll("text").style("font-size","11px");
+
+// ── Phase row backgrounds ─────────────────────────────────────────────────
+const phaseGroups = d3.group(tasks, d => d.phase);
+PHASES.forEach((phase, i) => {
+  const pts = phaseGroups.get(phase);
+  if (!pts) return;
+  const topId = pts[0].id, botId = pts[pts.length-1].id;
+  g.append("rect")
+    .attr("x",0).attr("width",innerW)
+    .attr("y", yScale(topId) - yScale.paddingInner()*yScale.step()/2)
+    .attr("height", yScale.step() * pts.length)
+    .attr("fill", color(phase)).attr("fill-opacity", 0.04)
+    .attr("rx",0);
+});
+
+// ── Bars ──────────────────────────────────────────────────────────────────
+const tooltip = d3.select("#tooltip");
+
+tasks.forEach(d => {
+  const x    = xScale(d.startDate);
+  const w    = Math.max(2, xScale(d.endDate) - xScale(d.startDate));
+  const y    = yScale(d.id);
+  const bh   = yScale.bandwidth();
+
+  // Full bar (background)
+  g.append("rect").attr("class","task-bar")
+    .attr("x",x).attr("width",w)
+    .attr("y",y).attr("height",bh)
+    .attr("rx",3)
+    .attr("fill",color(d.phase)).attr("fill-opacity",0.22)
+    .attr("stroke",color(d.phase)).attr("stroke-width",1);
+
+  // Progress fill
+  if (d.pct > 0) {
+    g.append("rect")
+      .attr("x",x).attr("width",Math.max(2, w * d.pct/100))
+      .attr("y",y).attr("height",bh)
+      .attr("rx",3)
+      .attr("fill",color(d.phase)).attr("pointer-events","none");
+  }
+
+  // Label inside bar (if wide enough)
+  const labelNode = g.append("text")
+    .attr("y", y + bh/2)
+    .attr("dominant-baseline","middle")
+    .attr("font-size","10px")
+    .text(`${d.pct}%`);
+
+  if (w > 34) {
+    labelNode.attr("class","task-label").attr("x", x + w - 4).attr("text-anchor","end");
+  } else {
+    labelNode.attr("class","task-label-out").attr("x", x + w + 4).attr("text-anchor","start");
+  }
+
+  // Hover overlay
+  g.append("rect")
+    .attr("x",x).attr("width",w)
+    .attr("y",y).attr("height",bh)
+    .attr("fill","transparent")
+    .attr("class","task-bar")
+    .on("mouseover",(event) => {
+      const dur = d3.timeDay.count(d.startDate, d.endDate);
+      tooltip.html(
+        `<strong style="color:${color(d.phase)}">${d.task}</strong><br>` +
+        `Phase: ${d.phase}<br>` +
+        `Start: ${d3.timeFormat("%b %d, %Y")(d.startDate)}<br>` +
+        `End: ${d3.timeFormat("%b %d, %Y")(d.endDate)}<br>` +
+        `Duration: ${dur} day${dur!==1?"s":""}<br>` +
+        `Progress: <strong>${d.pct}%</strong>`
+      ).style("opacity",1);
+    })
+    .on("mousemove",event => tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-70)+"px"))
+    .on("mouseout",() => tooltip.style("opacity",0));
+});
+
+// ── Today line ────────────────────────────────────────────────────────────
+const tx = xScale(today);
+if (tx > 0 && tx < innerW) {
+  g.append("line").attr("class","today-line")
+    .attr("x1",tx).attr("x2",tx)
+    .attr("y1",-10).attr("y2",innerH+10);
+  g.append("text")
+    .attr("x",tx+4).attr("y",-12)
+    .style("font-size","10px").style("fill","#ef4444")
+    .text("Today");
+}
+
+// ── Legend ────────────────────────────────────────────────────────────────
+const legend = d3.select("#legend");
+PHASES.forEach(phase => {
+  const item = legend.append("div").attr("class","legend-item");
+  item.append("div").attr("class","legend-swatch")
+    .style("background",color(phase));
+  item.append("span").text(phase);
+});
+</script>
+</body>
+</html>

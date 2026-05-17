@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Ridgeline / Joy Plot — snow-d3 example 30</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .ridge-area { transition: opacity 0.2s; cursor: pointer; }
+    .ridge-area:hover { opacity: 0.92; }
+    .ridge-line { fill: none; pointer-events: none; }
+    .axis text { font-size: 11px; fill: #555; }
+    .axis .domain { stroke: #ddd; }
+    .row-label { font-size: 12px; font-weight: 500; dominant-baseline: middle; text-anchor: end; }
+    .zero-line { stroke: #e0e0e0; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+    label { font-size: 13px; color: #555; display: flex; align-items: center; gap: 6px; }
+    input[type=range] { width: 90px; cursor: pointer; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Ridgeline / Joy Plot</h1>
+<p class="desc">Stacked KDE distributions for hourly temperatures by month. Adjust overlap and bandwidth.<br>Uses <code>d3.area()</code>, <code>curveCatmullRom</code>, KDE smoothing, and <code>schemeTableau10</code>.</p>
+<div class="controls">
+  <label>Overlap:
+    <input type="range" id="overlap" min="1.2" max="5" step="0.2" value="2.5">
+    <span id="ov-val">2.5</span>
+  </label>
+  <label>Bandwidth:
+    <input type="range" id="bw" min="0.5" max="6" step="0.25" value="2">
+    <span id="bw-val">2</span>
+  </label>
+  <button id="btn-fill" class="active">Filled</button>
+  <button id="btn-resample">Resample</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data: simulated hourly temperatures ───────────────────────────────────
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const BASE_TEMPS = [38,40,48,58,68,76,82,80,72,60,50,41];
+
+function normal(mean, sd) {
+  const u = Math.random(), v = Math.random();
+  return mean + sd * Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+}
+
+function genMonth(mean, n = 300) {
+  return d3.range(n).map(() => normal(mean, 8 + Math.random()*4));
+}
+
+function makeData() {
+  return MONTHS.map((name, i) => ({
+    name,
+    values: genMonth(BASE_TEMPS[i] + (Math.random()-0.5)*6)
+  }));
+}
+
+// ── KDE ────────────────────────────────────────────────────────────────────
+function kernelEpanechnikov(k) {
+  return v => Math.abs(v /= k) <= 1 ? 0.75*(1-v*v)/k : 0;
+}
+function kde(kernel, thresholds, values) {
+  return thresholds.map(t => [t, d3.mean(values, v => kernel(t - v))]);
+}
+
+// ── Layout ─────────────────────────────────────────────────────────────────
+const width = 720, height = 560;
+const marginL = 60, marginR = 30, marginT = 20, marginB = 50;
+const innerW = width  - marginL - marginR;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+const g = svg.append("g").attr("transform",`translate(${marginL},${marginT})`);
+
+const color = d3.scaleOrdinal(d3.schemeTableau10).domain(MONTHS);
+const tooltip = d3.select("#tooltip");
+const thresholds = d3.range(0, 110, 1);
+
+let seriesData = makeData();
+let overlap = 2.5, bandwidth = 2, filled = true;
+
+function render() {
+  g.selectAll("*").remove();
+
+  const n = seriesData.length;
+  const rowH = (height - marginT - marginB) / (n + 1 / overlap);
+  const step = rowH;
+
+  const xScale = d3.scaleLinear().domain([10, 105]).range([0, innerW]);
+  const yScaleUnit = d3.scaleLinear().range([0, -rowH * overlap]);
+
+  // X axis
+  g.append("g").attr("class","axis x-axis")
+    .attr("transform",`translate(0,${height - marginT - marginB})`)
+    .call(d3.axisBottom(xScale).ticks(7).tickFormat(d => `${d}°F`));
+  svg.append("text")
+    .attr("x", marginL + innerW/2).attr("y", height-6)
+    .attr("text-anchor","middle").style("font-size","11px").style("fill","#888")
+    .text("Temperature (°F)");
+
+  seriesData.forEach((series, i) => {
+    const density = kde(kernelEpanechnikov(bandwidth), thresholds, series.values);
+    const maxDensity = d3.max(density, d => d[1]);
+    yScaleUnit.domain([0, maxDensity]);
+
+    const yBase = (n - 1 - i) * step + (height - marginT - marginB) - step;
+
+    // Zero line
+    g.append("line").attr("class","zero-line")
+      .attr("x1",0).attr("x2",innerW)
+      .attr("y1",yBase).attr("y2",yBase);
+
+    const areaGen = d3.area()
+      .x(d => xScale(d[0]))
+      .y0(0)
+      .y1(d => yScaleUnit(d[1]))
+      .curve(d3.curveCatmullRom);
+
+    const lineGen = d3.line()
+      .x(d => xScale(d[0]))
+      .y(d => yScaleUnit(d[1]))
+      .curve(d3.curveCatmullRom);
+
+    const rowG = g.append("g")
+      .attr("transform",`translate(0,${yBase})`);
+
+    if (filled) {
+      rowG.append("path").attr("class","ridge-area")
+        .datum(density)
+        .attr("d", areaGen)
+        .attr("fill", color(series.name))
+        .attr("fill-opacity", 0.65)
+        .attr("stroke", d3.color(color(series.name)).darker(0.4))
+        .attr("stroke-width", 1.5)
+        .on("mouseover",(event)=>{
+          const stats = d3.extent(series.values);
+          tooltip.html(
+            `<strong style="color:${color(series.name)}">${series.name}</strong><br>` +
+            `Mean: ${d3.mean(series.values).toFixed(1)}°F<br>` +
+            `Std dev: ${d3.deviation(series.values).toFixed(1)}°F<br>` +
+            `Range: ${stats[0].toFixed(0)}–${stats[1].toFixed(0)}°F`
+          ).style("opacity",1);
+        })
+        .on("mousemove",event=>tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-50)+"px"))
+        .on("mouseout",()=>tooltip.style("opacity",0));
+    } else {
+      rowG.append("path").attr("class","ridge-line")
+        .datum(density)
+        .attr("d", lineGen)
+        .attr("stroke", color(series.name))
+        .attr("stroke-width", 2.5);
+    }
+
+    // Row label
+    g.append("text").attr("class","row-label")
+      .attr("x",-8).attr("y",yBase)
+      .attr("fill", color(series.name))
+      .text(series.name);
+  });
+}
+
+d3.select("#overlap").on("input",function(){ overlap=+this.value; d3.select("#ov-val").text(this.value); render(); });
+d3.select("#bw").on("input",function(){ bandwidth=+this.value; d3.select("#bw-val").text(this.value); render(); });
+d3.select("#btn-fill").on("click",function(){ filled=!filled; d3.select(this).classed("active",filled); render(); });
+d3.select("#btn-resample").on("click",()=>{ seriesData=makeData(); render(); });
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Radar / Spider Chart — snow-d3 example 22</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #1e1b2e; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #e2e8f0; }
+    p.desc { font-size: 0.85rem; color: #94a3b8; margin-bottom: 20px; text-align: center; }
+    #chart { background: #2d2a45; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    .spoke { stroke: rgba(255,255,255,0.12); }
+    .ring  { stroke: rgba(255,255,255,0.08); fill: none; }
+    .ring-label { font-size: 9px; fill: rgba(255,255,255,0.3); text-anchor: middle; }
+    .axis-label { font-size: 12px; fill: #cbd5e1; text-anchor: middle; }
+    .radar-area { opacity: 0.25; transition: opacity 0.2s; }
+    .radar-area:hover { opacity: 0.45; }
+    .radar-stroke { fill: none; stroke-width: 2; }
+    .dot { cursor: pointer; transition: r 0.1s; }
+    .dot:hover { r: 6; }
+    .legend { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: #94a3b8; }
+    .legend-swatch { width: 14px; height: 14px; border-radius: 50%; }
+    .legend-item.hidden { opacity: 0.3; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #334155; border-radius: 4px; background: #2d2a45; color: #cbd5e1; cursor: pointer; font-size: 13px; }
+    button:hover { background: #334155; }
+    .tooltip {
+      position: fixed; background: rgba(2,6,23,0.95); color: #e2e8f0;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      border: 1px solid #334155; line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Radar / Spider Chart</h1>
+<p class="desc">Multi-dimensional comparison across axes. Click legend to toggle series. Uses <code>d3.line()</code> with <code>curveLinearClosed</code> and radial projections.</p>
+<div class="controls">
+  <button id="btn-random">Randomize</button>
+  <button id="btn-rings">Rings: 5</button>
+</div>
+<div id="chart"></div>
+<div class="legend" id="legend"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const AXES = ["Speed","Power","Defense","Agility","Endurance","Intelligence","Luck"];
+const SERIES_NAMES = ["Hero Alpha","Hero Beta","Hero Gamma","Hero Delta"];
+const color = d3.scaleOrdinal(["#f43f5e","#3b82f6","#22c55e","#f59e0b"]).domain(SERIES_NAMES);
+
+function makeData() {
+  return SERIES_NAMES.map(name => ({
+    name,
+    values: AXES.map(a => +(Math.random() * 0.75 + 0.15).toFixed(3))
+  }));
+}
+
+// ── Config ────────────────────────────────────────────────────────────────
+const width = 520, height = 520;
+const cx = width / 2, cy = height / 2;
+const R = 200;
+let numRings = 5;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const gBase   = svg.append("g").attr("transform",`translate(${cx},${cy})`);
+const gSeries = svg.append("g").attr("transform",`translate(${cx},${cy})`);
+
+const tooltip = d3.select("#tooltip");
+let seriesData = makeData();
+let hidden = new Set();
+
+function angle(i, n) { return (i / n) * 2 * Math.PI - Math.PI / 2; }
+function project(value, i, n) {
+  const a = angle(i, n);
+  return [value * R * Math.cos(a), value * R * Math.sin(a)];
+}
+
+function render() {
+  gBase.selectAll("*").remove();
+  gSeries.selectAll("*").remove();
+
+  const n = AXES.length;
+
+  // ── Rings ────────────────────────────────────────────────────────────────
+  d3.range(1, numRings + 1).forEach(k => {
+    const r = R * k / numRings;
+    const pts = d3.range(n).map(i => {
+      const a = angle(i, n);
+      return [r * Math.cos(a), r * Math.sin(a)];
+    });
+    gBase.append("polygon")
+      .attr("class","ring")
+      .attr("points", pts.map(p => p.join(",")).join(" "));
+    if (k > 0) {
+      gBase.append("text").attr("class","ring-label")
+        .attr("x", 4).attr("y", -r + 3)
+        .text(`${Math.round(k / numRings * 100)}%`);
+    }
+  });
+
+  // ── Spokes & axis labels ─────────────────────────────────────────────────
+  AXES.forEach((label, i) => {
+    const [x, y] = project(1, i, n);
+    gBase.append("line").attr("class","spoke")
+      .attr("x1",0).attr("y1",0).attr("x2",x).attr("y2",y);
+
+    const labelR = 1.14;
+    const [lx, ly] = project(labelR, i, n);
+    gBase.append("text").attr("class","axis-label")
+      .attr("x",lx).attr("y",ly)
+      .attr("dominant-baseline","middle")
+      .text(label);
+  });
+
+  // ── Series ────────────────────────────────────────────────────────────────
+  seriesData.forEach(series => {
+    if (hidden.has(series.name)) return;
+
+    const pts = series.values.map((v, i) => project(v, i, n));
+    const pathData = d3.line().curve(d3.curveLinearClosed)(pts);
+
+    gSeries.append("path").attr("class","radar-area")
+      .attr("d", pathData)
+      .attr("fill", color(series.name));
+
+    gSeries.append("path").attr("class","radar-stroke")
+      .attr("d", pathData)
+      .attr("stroke", color(series.name));
+
+    // Dots at each axis
+    pts.forEach(([x,y], i) => {
+      gSeries.append("circle").attr("class","dot")
+        .attr("cx",x).attr("cy",y).attr("r",4)
+        .attr("fill",color(series.name)).attr("stroke","#2d2a45").attr("stroke-width",1.5)
+        .on("mouseover",(event) => {
+          tooltip.html(
+            `<strong style="color:${color(series.name)}">${series.name}</strong><br>` +
+            `${AXES[i]}: <strong>${(series.values[i] * 100).toFixed(1)}%</strong>`
+          ).style("opacity",1);
+        })
+        .on("mousemove",event => tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px"))
+        .on("mouseout",() => tooltip.style("opacity",0));
+    });
+  });
+
+  // ── Legend ────────────────────────────────────────────────────────────────
+  const leg = d3.select("#legend");
+  leg.selectAll("*").remove();
+  seriesData.forEach(s => {
+    leg.append("div").attr("class","legend-item" + (hidden.has(s.name) ? " hidden" : ""))
+      .call(el => {
+        el.append("div").attr("class","legend-swatch").style("background",color(s.name));
+        el.append("span").text(s.name);
+      })
+      .on("click", () => {
+        if (hidden.has(s.name)) hidden.delete(s.name);
+        else hidden.add(s.name);
+        render();
+      });
+  });
+}
+
+let ringsLabel = 5;
+d3.select("#btn-rings").on("click", function() {
+  ringsLabel = ringsLabel === 5 ? 10 : 5;
+  numRings = ringsLabel;
+  d3.select(this).text(`Rings: ${numRings}`);
+  render();
+});
+d3.select("#btn-random").on("click", () => { seriesData = makeData(); render(); });
+
+render();
+</script>
+</body>
+</html>

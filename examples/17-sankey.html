@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Sankey Diagram — snow-d3 example 17</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .link { fill: none; transition: stroke-opacity 0.2s; }
+    .link:hover { stroke-opacity: 0.6 !important; }
+    .node rect { cursor: pointer; rx: 4; }
+    .node rect:hover { brightness: 1.1; }
+    .node-label { font-size: 12px; fill: #333; pointer-events: none; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Sankey Diagram</h1>
+<p class="desc">Energy flow from sources to carriers to sectors. Hover links/nodes for details.<br>Uses <code>d3-sankey</code> (CDN), <code>sankeyLinkHorizontal()</code>, <code>schemeTableau10</code>.</p>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+import * as sankey from "https://cdn.jsdelivr.net/npm/d3-sankey@0.12/+esm";
+
+// ── Data — energy flow ────────────────────────────────────────────────────
+const rawNodes = [
+  // Sources
+  "Solar","Wind","Natural Gas","Coal","Hydro","Nuclear",
+  // Carriers
+  "Electricity","Heat","Fuel",
+  // Sectors
+  "Residential","Industry","Transport","Commercial"
+];
+
+const rawLinks = [
+  // → Electricity
+  { source:"Solar",       target:"Electricity", value: 180 },
+  { source:"Wind",        target:"Electricity", value: 220 },
+  { source:"Natural Gas", target:"Electricity", value: 340 },
+  { source:"Coal",        target:"Electricity", value: 280 },
+  { source:"Hydro",       target:"Electricity", value: 150 },
+  { source:"Nuclear",     target:"Electricity", value: 200 },
+  // → Heat
+  { source:"Natural Gas", target:"Heat",        value: 160 },
+  { source:"Coal",        target:"Heat",        value: 80  },
+  // → Fuel
+  { source:"Natural Gas", target:"Fuel",        value: 120 },
+  { source:"Coal",        target:"Fuel",        value: 40  },
+  // Electricity → Sectors
+  { source:"Electricity", target:"Residential", value: 320 },
+  { source:"Electricity", target:"Industry",    value: 450 },
+  { source:"Electricity", target:"Commercial",  value: 280 },
+  { source:"Electricity", target:"Transport",   value: 120 },
+  // Heat → Sectors
+  { source:"Heat",        target:"Residential", value: 130 },
+  { source:"Heat",        target:"Industry",    value: 110 },
+  // Fuel → Sectors
+  { source:"Fuel",        target:"Transport",   value: 130 },
+  { source:"Fuel",        target:"Industry",    value: 30  },
+];
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 860, height = 520;
+const margin = { top: 10, right: 120, bottom: 10, left: 120 };
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const color = d3.scaleOrdinal(d3.schemeTableau10)
+  .domain(rawNodes);
+
+// ── Build Sankey ──────────────────────────────────────────────────────────
+const { sankey: sankeyLayout, sankeyLinkHorizontal } = sankey;
+
+const graph = sankeyLayout()
+  .nodeId(d => d.name)
+  .nodeWidth(18)
+  .nodePadding(14)
+  .extent([[margin.left, margin.top],[width - margin.right, height - margin.bottom]])(
+    {
+      nodes: rawNodes.map(name => ({ name })),
+      links: rawLinks.map(l => ({ ...l }))
+    }
+  );
+
+const tooltip = d3.select("#tooltip");
+
+// ── Links ─────────────────────────────────────────────────────────────────
+svg.append("g").selectAll(".link")
+  .data(graph.links)
+  .join("path")
+    .attr("class","link")
+    .attr("d", sankeyLinkHorizontal())
+    .attr("stroke", d => d3.color(color(d.source.name)).copy({ opacity: 1 }))
+    .attr("stroke-width", d => Math.max(1, d.width))
+    .attr("stroke-opacity", 0.3)
+    .on("mouseover", (event, d) => {
+      d3.select(event.currentTarget).attr("stroke-opacity",0.6);
+      tooltip.html(
+        `<strong>${d.source.name}</strong> → <strong>${d.target.name}</strong><br>` +
+        `Flow: <strong>${d.value} TWh</strong>`
+      ).style("opacity",1);
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout", (event) => {
+      d3.select(event.currentTarget).attr("stroke-opacity",0.3);
+      tooltip.style("opacity",0);
+    });
+
+// ── Nodes ─────────────────────────────────────────────────────────────────
+const nodeG = svg.append("g").selectAll("g")
+  .data(graph.nodes)
+  .join("g").attr("class","node");
+
+nodeG.append("rect")
+  .attr("x", d => d.x0).attr("y", d => d.y0)
+  .attr("width", d => d.x1 - d.x0)
+  .attr("height", d => Math.max(1, d.y1 - d.y0))
+  .attr("rx", 3)
+  .attr("fill", d => color(d.name))
+  .on("mouseover", (event, d) => {
+    tooltip.html(
+      `<strong style="color:${color(d.name)}">${d.name}</strong><br>` +
+      `Total flow: <strong>${d.value} TWh</strong>`
+    ).style("opacity",1);
+  })
+  .on("mousemove", event => {
+    tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+  })
+  .on("mouseout", () => tooltip.style("opacity",0));
+
+nodeG.append("text")
+  .attr("class","node-label")
+  .attr("x", d => d.x0 < width / 2 ? d.x1 + 8 : d.x0 - 8)
+  .attr("y", d => (d.y0 + d.y1) / 2)
+  .attr("text-anchor", d => d.x0 < width / 2 ? "start" : "end")
+  .attr("dominant-baseline","middle")
+  .text(d => `${d.name} (${d.value})`);
+</script>
+</body>
+</html>

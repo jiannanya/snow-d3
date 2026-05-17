@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Calendar Heatmap — snow-d3 example 15</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 16px; }
+    .day { rx: 2; cursor: pointer; }
+    .day:hover { stroke: #333; stroke-width: 1.5; }
+    .month-label { font-size: 11px; fill: #777; }
+    .dow-label { font-size: 10px; fill: #999; }
+    .year-label { font-size: 13px; font-weight: 600; fill: #444; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; align-items: center; }
+    select { padding: 4px 8px; border: 1px solid #bbb; border-radius: 4px; font-size: 13px; }
+    label { font-size: 13px; color: #555; }
+    .tooltip {
+      position: fixed; background: rgba(20,20,20,0.9); color: #fff;
+      padding: 7px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Calendar Heatmap</h1>
+<p class="desc">GitHub-style contribution calendar. Each cell is one day. Uses <code>scaleSequential</code>, <code>d3-time</code> utilities, and <code>interpolateGreens</code>.</p>
+<div class="controls">
+  <label>Color scheme:
+    <select id="sel-scheme">
+      <option value="Greens">Greens</option>
+      <option value="Blues">Blues</option>
+      <option value="Oranges">Oranges</option>
+      <option value="Purples">Purples</option>
+      <option value="YlOrRd">YlOrRd</option>
+    </select>
+  </label>
+  <label>Years:
+    <select id="sel-years">
+      <option value="1">1 year</option>
+      <option value="2" selected>2 years</option>
+      <option value="3">3 years</option>
+    </select>
+  </label>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Synthetic data ────────────────────────────────────────────────────────
+const endDate   = new Date(2025, 11, 31);
+const startDate = new Date(2024, 0, 1);
+
+function makeDayData(start, end) {
+  const map = new Map();
+  let prev = 0;
+  d3.timeDays(start, d3.timeDay.offset(end, 1)).forEach(d => {
+    // Random walk with streaks
+    prev = Math.max(0, prev + (Math.random() < 0.15 ? -prev : Math.round((Math.random()-0.35)*5)));
+    if (Math.random() < 0.2) prev = 0; // quiet days
+    map.set(d3.timeFormat("%Y-%m-%d")(d), prev);
+  });
+  return map;
+}
+
+// ── Config ────────────────────────────────────────────────────────────────
+const cellSize = 13, cellGap = 2;
+const step = cellSize + cellGap;
+const weekW = step;
+const yearH = step * 7 + 30; // 7 rows + month label
+const marginLeft = 28, marginTop = 20;
+
+const schemeMap = {
+  Greens: d3.interpolateGreens,
+  Blues:  d3.interpolateBuPu,
+  Oranges:d3.interpolateOranges,
+  Purples:d3.interpolatePurples,
+  YlOrRd: d3.interpolateYlOrRd,
+};
+
+const DOW_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const tooltip = d3.select("#tooltip");
+
+let numYears = 2;
+let scheme   = "Greens";
+let dayData  = makeDayData(startDate, endDate);
+
+function render() {
+  d3.select("#chart").selectAll("*").remove();
+
+  const years = d3.range(2025 - numYears + 1, 2026);
+
+  const colorScale = d3.scaleSequential(schemeMap[scheme])
+    .domain([0, d3.max(dayData.values())]);
+
+  const totalW = marginLeft + 53 * weekW + 20; // max 53 weeks
+  const totalH = marginTop + years.length * yearH + 20;
+
+  const svg = d3.select("#chart").append("svg")
+    .attr("width", totalW).attr("height", totalH)
+    .style("max-width","100%");
+
+  // Day-of-week labels
+  DOW_LABELS.forEach((label, i) => {
+    if (i % 2 === 1) {
+      svg.append("text").attr("class","dow-label")
+        .attr("x", marginLeft - 4).attr("y", marginTop + i * step + cellSize * 0.75)
+        .attr("text-anchor","end").text(label);
+    }
+  });
+
+  years.forEach((year, yi) => {
+    const yOff = marginTop + yi * yearH;
+
+    svg.append("text").attr("class","year-label")
+      .attr("x", marginLeft).attr("y", yOff - 6).text(year);
+
+    const yearStart = new Date(year, 0, 1);
+    const yearEnd   = new Date(year, 11, 31);
+    const days = d3.timeDays(yearStart, d3.timeDay.offset(yearEnd, 1));
+
+    // Month labels
+    const months = d3.timeMonths(yearStart, d3.timeDay.offset(yearEnd, 1));
+    months.forEach(m => {
+      const weekNum = d3.timeWeek.count(yearStart, m);
+      svg.append("text").attr("class","month-label")
+        .attr("x", marginLeft + weekNum * weekW)
+        .attr("y", yOff + 7 * step + 14)
+        .text(d3.timeFormat("%b")(m));
+    });
+
+    // Cells
+    svg.selectAll(`.day-${year}`)
+      .data(days)
+      .join("rect")
+        .attr("class","day")
+        .attr("width", cellSize).attr("height", cellSize)
+        .attr("rx", 2)
+        .attr("x", d => marginLeft + d3.timeWeek.count(yearStart, d) * weekW)
+        .attr("y", d => yOff + d.getDay() * step)
+        .attr("fill", d => {
+          const key = d3.timeFormat("%Y-%m-%d")(d);
+          const val = dayData.get(key) || 0;
+          return val === 0 ? "#eee" : colorScale(val);
+        })
+        .on("mouseover", (event, d) => {
+          const key = d3.timeFormat("%Y-%m-%d")(d);
+          const val = dayData.get(key) || 0;
+          tooltip.html(
+            `<strong>${d3.timeFormat("%B %d, %Y")(d)}</strong><br>` +
+            `${DOW_LABELS[d.getDay()]}<br>Value: <strong>${val}</strong>`
+          ).style("opacity",1);
+        })
+        .on("mousemove", event => {
+          tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-40)+"px");
+        })
+        .on("mouseout",() => tooltip.style("opacity",0));
+  });
+
+  // Color legend
+  const lx = marginLeft, ly = totalH - 18;
+  const steps = 10;
+  d3.range(steps).forEach(i => {
+    svg.append("rect")
+      .attr("x", lx + i * (cellSize + 2)).attr("y", ly)
+      .attr("width", cellSize).attr("height", cellSize).attr("rx", 2)
+      .attr("fill", i === 0 ? "#eee" : colorScale((d3.max(dayData.values()) / steps) * i));
+  });
+  svg.append("text").attr("x", lx - 4).attr("y", ly + 10)
+    .attr("text-anchor","end").style("font-size","10px").style("fill","#999").text("Less");
+  svg.append("text").attr("x", lx + steps*(cellSize+2) + 4).attr("y", ly + 10)
+    .style("font-size","10px").style("fill","#999").text("More");
+}
+
+d3.select("#sel-scheme").on("change", function() { scheme = this.value; render(); });
+d3.select("#sel-years").on("change", function() { numYears = +this.value; render(); });
+
+render();
+</script>
+</body>
+</html>

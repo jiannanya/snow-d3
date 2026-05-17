@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Contour Density — snow-d3 example 26</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f5f5f5; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #222; }
+    p.desc { font-size: 0.85rem; color: #666; margin-bottom: 20px; text-align: center; }
+    #chart { background: #0f172a; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
+    .contour-path { stroke: none; }
+    .point-dot { fill-opacity: 0.6; pointer-events: none; }
+    .axis text { font-size: 11px; fill: #94a3b8; }
+    .axis .domain { stroke: #334155; }
+    .axis .tick line { stroke: #1e293b; }
+    .controls { margin-bottom: 12px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; justify-content: center; }
+    label { font-size: 13px; color: #555; display: flex; align-items: center; gap: 6px; }
+    input[type=range] { width: 100px; cursor: pointer; }
+    select { padding: 4px 8px; border: 1px solid #bbb; border-radius: 4px; font-size: 13px; }
+    button { padding: 5px 14px; border: 1px solid #bbb; border-radius: 4px; background: white; cursor: pointer; font-size: 13px; }
+    button:hover { background: #eee; }
+    button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+  </style>
+</head>
+<body>
+<h1>D3 Density Contour / KDE</h1>
+<p class="desc">2D kernel density estimation with adjustable bandwidth. Uses <code>d3.contourDensity()</code>, <code>d3.geoPath()</code>, <code>scaleSequential</code>, and configurable color schemes.</p>
+<div class="controls">
+  <label>Bandwidth:
+    <input type="range" id="bandwidth" min="8" max="60" value="22" step="2">
+    <span id="bw-val">22</span>
+  </label>
+  <label>Thresholds:
+    <input type="range" id="thresholds" min="5" max="30" value="14" step="1">
+    <span id="th-val">14</span>
+  </label>
+  <label>Color:
+    <select id="scheme">
+      <option value="inferno">Inferno</option>
+      <option value="viridis">Viridis</option>
+      <option value="plasma">Plasma</option>
+      <option value="turbo">Turbo</option>
+      <option value="cividis">Cividis</option>
+    </select>
+  </label>
+  <button id="btn-points" class="active">Points</button>
+  <button id="btn-resample">Resample</button>
+</div>
+<div id="chart"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+function normal2d(mx, my, sx, sy, rho, n) {
+  return d3.range(n).map(() => {
+    const u = Math.random(), v = Math.random();
+    const z0 = Math.sqrt(-2*Math.log(u)) * Math.cos(2*Math.PI*v);
+    const z1 = rho*z0 + Math.sqrt(1-rho*rho) * Math.sqrt(-2*Math.log(Math.random())) * Math.cos(2*Math.PI*Math.random());
+    return [mx + sx*z0, my + sy*z1];
+  });
+}
+
+function makePoints(n = 800) {
+  return [
+    ...normal2d(3, 3, 1.2, 0.8, 0.4, Math.round(n*0.35)),
+    ...normal2d(7, 6, 0.9, 1.4, -0.3, Math.round(n*0.3)),
+    ...normal2d(5, 8, 1.5, 0.6, 0.6, Math.round(n*0.2)),
+    ...normal2d(9, 2, 0.6, 1.0, 0.0, Math.round(n*0.15)),
+  ];
+}
+
+// ── Layout ────────────────────────────────────────────────────────────────
+const width = 720, height = 480;
+const margin = { top: 20, right: 20, bottom: 40, left: 50 };
+const innerW = width  - margin.left - margin.right;
+const innerH = height - margin.top  - margin.bottom;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox",`0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${margin.left},${margin.top})`);
+
+const schemeMap = {
+  inferno: d3.interpolateInferno,
+  viridis: d3.interpolateViridis,
+  plasma:  d3.interpolatePlasma,
+  turbo:   d3.interpolateTurbo,
+  cividis: d3.interpolateCividis,
+};
+
+let pts = makePoints();
+let showPoints = true;
+let bandwidth = 22, thresholds = 14, scheme = "inferno";
+
+const xScale = d3.scaleLinear().domain([0, 11]).range([0, innerW]);
+const yScale = d3.scaleLinear().domain([0, 11]).range([innerH, 0]);
+
+// Axes (drawn once)
+g.append("g").attr("class","axis x-axis")
+  .attr("transform",`translate(0,${innerH})`)
+  .call(d3.axisBottom(xScale).ticks(6))
+  .select(".domain").attr("stroke","#334155");
+g.append("g").attr("class","axis y-axis")
+  .call(d3.axisLeft(yScale).ticks(6))
+  .select(".domain").attr("stroke","#334155");
+g.selectAll(".tick line").attr("stroke","#1e293b");
+
+const contourG = g.append("g").attr("class","contours");
+const pointG   = g.append("g").attr("class","points");
+
+function render() {
+  // Contour density (works in pixel space, transform back)
+  const density = d3.contourDensity()
+    .x(d => xScale(d[0]))
+    .y(d => yScale(d[1]))
+    .size([innerW, innerH])
+    .bandwidth(bandwidth)
+    .thresholds(thresholds)(pts);
+
+  const colorScale = d3.scaleSequential(schemeMap[scheme])
+    .domain([0, d3.max(density, d => d.value)]);
+
+  contourG.selectAll(".contour-path")
+    .data(density)
+    .join("path")
+      .attr("class","contour-path")
+      .attr("d", d3.geoPath())
+      .attr("fill", d => colorScale(d.value));
+
+  // Points
+  pointG.selectAll(".point-dot")
+    .data(showPoints ? pts : [])
+    .join("circle")
+      .attr("class","point-dot")
+      .attr("cx",d => xScale(d[0]))
+      .attr("cy",d => yScale(d[1]))
+      .attr("r", 2)
+      .attr("fill","white");
+}
+
+// Controls
+d3.select("#bandwidth").on("input", function() {
+  bandwidth = +this.value;
+  d3.select("#bw-val").text(bandwidth);
+  render();
+});
+d3.select("#thresholds").on("input", function() {
+  thresholds = +this.value;
+  d3.select("#th-val").text(thresholds);
+  render();
+});
+d3.select("#scheme").on("change", function() { scheme = this.value; render(); });
+d3.select("#btn-points").on("click", function() {
+  showPoints = !showPoints;
+  d3.select(this).classed("active", showPoints);
+  render();
+});
+d3.select("#btn-resample").on("click", () => { pts = makePoints(); render(); });
+
+render();
+</script>
+</body>
+</html>

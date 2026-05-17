@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 Radial Bar Chart — snow-d3 example 16</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #0f172a; display: flex; flex-direction: column; align-items: center; padding: 24px; }
+    h1 { font-size: 1.3rem; margin-bottom: 6px; color: #e2e8f0; }
+    p.desc { font-size: 0.85rem; color: #94a3b8; margin-bottom: 20px; text-align: center; }
+    #chart { background: #1e293b; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+    .arc-bar { cursor: pointer; transition: opacity 0.15s; }
+    .arc-bar:hover { opacity: 0.8; }
+    .grid-circle { fill: none; stroke: rgba(255,255,255,0.06); }
+    .axis-line { stroke: rgba(255,255,255,0.08); }
+    .category-label { font-size: 11px; fill: #cbd5e1; }
+    .value-label { font-size: 10px; fill: #64748b; text-anchor: middle; }
+    .controls { margin-bottom: 12px; display: flex; gap: 10px; }
+    button { padding: 5px 14px; border: 1px solid #334155; border-radius: 4px; background: #1e293b; color: #cbd5e1; cursor: pointer; font-size: 13px; }
+    button:hover { background: #334155; }
+    .tooltip {
+      position: fixed; background: rgba(2,6,23,0.95); color: #e2e8f0;
+      padding: 8px 12px; border-radius: 6px; font-size: 12px;
+      pointer-events: none; opacity: 0; transition: opacity 0.1s;
+      border: 1px solid #334155; line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+<h1>D3 Radial Bar Chart</h1>
+<p class="desc">Polar / coxcomb chart where each bar's length encodes value. Uses <code>scaleRadial</code>, <code>arc()</code>, radial axis, and animated entrance.</p>
+<div class="controls">
+  <button id="btn-random">Randomize</button>
+  <button id="btn-coxcomb" class="active">Coxcomb</button>
+  <button id="btn-nightingale">Nightingale</button>
+</div>
+<div id="chart"></div>
+<div class="tooltip" id="tooltip"></div>
+
+<script type="module">
+import * as d3 from "https://cdn.jsdelivr.net/npm/d3@7/+esm";
+
+// ── Data ──────────────────────────────────────────────────────────────────
+const CATEGORIES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December"
+];
+
+function makeData() {
+  return CATEGORIES.map((name, i) => ({
+    name,
+    value: Math.round(Math.random() * 80 + 20),
+    prev:  Math.round(Math.random() * 80 + 20),
+  }));
+}
+let data = makeData();
+let mode = "coxcomb"; // or "nightingale"
+
+// ── Dimensions ────────────────────────────────────────────────────────────
+const width = 560, height = 560;
+const cx = width / 2, cy = height / 2;
+const outerRadius = Math.min(width, height) / 2 - 60;
+const innerRadius = 30;
+
+const svg = d3.select("#chart").append("svg")
+  .attr("width", width).attr("height", height)
+  .attr("viewBox", `0 0 ${width} ${height}`)
+  .style("max-width","100%").style("height","auto");
+
+const g = svg.append("g").attr("transform",`translate(${cx},${cy})`);
+const tooltip = d3.select("#tooltip");
+const color = d3.scaleSequential(d3.interpolateTurbo).domain([0, CATEGORIES.length]);
+
+function render(animate = true) {
+  const n = data.length;
+  const angleSlice = (2 * Math.PI) / n;
+  const dur = animate ? 700 : 0;
+
+  const maxVal = d3.max(data, d => d.value);
+
+  const rScale = d3.scaleRadial()
+    .domain([0, maxVal])
+    .range([innerRadius, outerRadius]);
+
+  // Grid circles
+  g.selectAll(".grid-circle").remove();
+  [0.25, 0.5, 0.75, 1].forEach(t => {
+    g.append("circle").attr("class","grid-circle")
+      .attr("r", innerRadius + t * (outerRadius - innerRadius));
+    g.append("text").attr("class","value-label")
+      .attr("y", -(innerRadius + t * (outerRadius - innerRadius)) - 3)
+      .text(Math.round(maxVal * t));
+  });
+
+  // Axis lines
+  g.selectAll(".axis-line").remove();
+  data.forEach((d, i) => {
+    const angle = angleSlice * i - Math.PI / 2;
+    g.append("line").attr("class","axis-line")
+      .attr("x1", Math.cos(angle) * innerRadius)
+      .attr("y1", Math.sin(angle) * innerRadius)
+      .attr("x2", Math.cos(angle) * outerRadius)
+      .attr("y2", Math.sin(angle) * outerRadius);
+  });
+
+  // Bars
+  const arcGen = (d, i) => {
+    const startAngle = angleSlice * i - Math.PI / 2;
+    const endAngle   = startAngle + angleSlice * 0.9;
+    if (mode === "nightingale") {
+      // In nightingale mode all bars end at outerRadius; inner radius encodes value
+      const r0 = outerRadius - (outerRadius - innerRadius) * (d.value / maxVal);
+      return d3.arc()({
+        innerRadius: r0, outerRadius,
+        startAngle, endAngle
+      });
+    }
+    return d3.arc()({
+      innerRadius,
+      outerRadius: rScale(d.value),
+      startAngle, endAngle
+    });
+  };
+
+  const bars = g.selectAll(".arc-bar")
+    .data(data, d => d.name)
+    .join(
+      enter => enter.append("path").attr("class","arc-bar")
+        .attr("fill", (d,i) => color(i))
+        .attr("d", (d, i) => d3.arc()({
+          innerRadius, outerRadius: innerRadius,
+          startAngle: angleSlice * i - Math.PI/2,
+          endAngle:   angleSlice * i - Math.PI/2
+        })),
+      update => update,
+      exit => exit.remove()
+    )
+    .on("mouseover", (event, d) => {
+      tooltip.html(
+        `<strong style="color:${color(data.indexOf(d))}">${d.name}</strong><br>` +
+        `Value: <strong>${d.value}</strong><br>Prev: ${d.prev}`
+      ).style("opacity",1);
+    })
+    .on("mousemove", event => {
+      tooltip.style("left",(event.clientX+14)+"px").style("top",(event.clientY-32)+"px");
+    })
+    .on("mouseout", () => tooltip.style("opacity",0));
+
+  bars.transition().duration(dur).ease(d3.easeBackOut.overshoot(0.4))
+    .attr("d", (d, i) => arcGen(d, i));
+
+  // Category labels
+  g.selectAll(".category-label").remove();
+  data.forEach((d, i) => {
+    const angle = angleSlice * i + angleSlice / 2 - Math.PI / 2;
+    const r = outerRadius + 18;
+    g.append("text").attr("class","category-label")
+      .attr("x", Math.cos(angle) * r)
+      .attr("y", Math.sin(angle) * r)
+      .attr("text-anchor", "middle")
+      .attr("dominant-baseline","middle")
+      .text(d.name.slice(0,3));
+  });
+}
+
+d3.select("#btn-random").on("click", () => { data = makeData(); render(); });
+d3.select("#btn-coxcomb").on("click", function() {
+  mode = "coxcomb";
+  d3.selectAll("button").classed("active",false); d3.select(this).classed("active",true);
+  render();
+});
+d3.select("#btn-nightingale").on("click", function() {
+  mode = "nightingale";
+  d3.selectAll("button").classed("active",false); d3.select(this).classed("active",true);
+  render();
+});
+
+render(false);
+</script>
+</body>
+</html>
